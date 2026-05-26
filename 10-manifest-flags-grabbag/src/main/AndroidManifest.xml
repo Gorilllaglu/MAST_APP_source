@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+         В одном <application> сразу 4 опасных манифестных флага:
+
+         1. android:debuggable="true"               — приложение можно подключить
+                                                       отладчиком в release.
+         2. android:allowBackup="true"              — Android Auto-Backup унесёт
+                                                       приватные файлы в Google Drive.
+                                                       (При этом нет <full-backup-content>
+                                                       с exclude — попадёт всё.)
+         3. android:hasFragileUserData="true"       — при удалении приложения
+                                                       пользователю предложат
+                                                       сохранить его данные.
+         4. android:requestLegacyExternalStorage="true" — приложение продолжает
+                                                       использовать legacy file access
+                                                       вместо Scoped Storage.
+    -->
+    <application
+        android:label="Vuln10 ManifestFlags"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
+        android:debuggable="true"
+        android:allowBackup="true"
+        android:hasFragileUserData="true"
+        android:requestLegacyExternalStorage="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="Vuln12 ExportedComponents"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+        <!-- Лаунчер: легитимно exported. Не уязвимость. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+             Сервис, экспортированный без permission. Любое стороннее
+             приложение может вызвать его и передать произвольные данные
+             в Intent extras. Сервис выполняет «привилегированное» действие
+             (логирует и эмулирует отправку SMS).
+        -->
+        <service
+            android:name=".ExportedService"
+            android:exported="true" />
+
+        <!--
+             Broadcast Receiver, объявленный с exported="true" и custom action.
+             Любое приложение может отправить broadcast с этим action и
+             передать произвольные данные.
+        -->
+        <receiver
+            android:name=".ExportedReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.masttest.vuln12.ACTION_TRIGGER" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+             Content Provider, экспортированный без read/write permission.
+             Любое приложение может query/insert/update/delete данные через
+             этот CP без какой-либо авторизации.
+        -->
+        <provider
+            android:name=".ExportedProvider"
+            android:authorities="com.masttest.vuln12.provider"
+            android:exported="true"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>

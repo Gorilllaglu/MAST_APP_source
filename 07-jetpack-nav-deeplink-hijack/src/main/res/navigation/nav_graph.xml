@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/loginFragment">
+
+    <!--
+         StartDestination — экран логина. По задумке пользователь
+         попадает сюда первым, и только после успешного логина
+         может перейти на admin/payment экраны.
+    -->
+    <fragment
+        android:id="@+id/loginFragment"
+        android:name="com.masttest.vuln07.LoginFragment"
+        android:label="Login" />
+
+    <fragment
+        android:id="@+id/homeFragment"
+        android:name="com.masttest.vuln07.HomeFragment"
+        android:label="Home" />
+
+    <!--
+         VULN: «защищённый» admin-экран имеет прямой deeplink.
+         Любой intent VIEW с URI vuln07://app/admin откроет
+         AdminFragment, МИНУЯ LoginFragment. Auth-check внутри
+         LoginFragment не выполняется, экран admin сразу доступен.
+    -->
+    <fragment
+        android:id="@+id/adminFragment"
+        android:name="com.masttest.vuln07.AdminFragment"
+        android:label="Admin">
+        <deepLink app:uri="vuln07://app/admin" />
+    </fragment>
+
+    <!--
+         VULN: «защищённый» payment-экран с параметром cardId
+         тоже доступен через deeplink. Атакующий передаёт
+         vuln07://app/payment/4242 и попадает на экран сразу
+         с переданным cardId.
+    -->
+    <fragment
+        android:id="@+id/paymentFragment"
+        android:name="com.masttest.vuln07.PaymentFragment"
+        android:label="Payment">
+        <argument
+            android:name="cardId"
+            app:argType="string"
+            android:defaultValue="0000" />
+        <deepLink app:uri="vuln07://app/payment/{cardId}" />
+    </fragment>
+
+    <!--
+         VULN: ещё один deeplink на admin через https-схему,
+         autoVerify не настроен → любая страница может
+         задеплинклинкать в admin через web-link
+         https://app.example.com/internal/admin
+    -->
+    <fragment
+        android:id="@+id/secretsFragment"
+        android:name="com.masttest.vuln07.SecretsFragment"
+        android:label="Secrets">
+        <deepLink app:uri="https://app.example.com/internal/secrets" />
+    </fragment>
+</navigation>

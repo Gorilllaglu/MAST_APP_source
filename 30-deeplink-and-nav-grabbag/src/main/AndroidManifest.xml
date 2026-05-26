@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="Vuln30 DeeplinkAndNav"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+             (1) Custom URI scheme deeplink. Любое приложение может
+                 объявить такой же intent-filter в своём манифесте,
+                 и Android покажет chooser «открыть в:» — приложение
+                 атакующего может перехватить deeplink с токеном.
+                 Плюс сам наш приём deeplink-а небезопасен: токен
+                 берётся из query-string, и Activity автоматически
+                 авторизует пользователя.
+        -->
+        <activity
+            android:name=".LoginByDeeplinkActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vuln30" android:host="login" />
+            </intent-filter>
+        </activity>
+
+        <!--
+             (2) App Link с autoVerify="true" БЕЗ опубликованного
+                 /.well-known/assetlinks.json для домена. На
+                 устройствах с Android 12+ autoVerify тихо отключится
+                 (нет JSON), и Android вернётся к режиму chooser:
+                 любое приложение, заявившее то же intent-filter,
+                 сможет перехватить deeplink.
+        -->
+        <activity
+            android:name=".ProfileViaAppLinkActivity"
+            android:exported="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="myapp.example.com"
+                    android:pathPrefix="/profile" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

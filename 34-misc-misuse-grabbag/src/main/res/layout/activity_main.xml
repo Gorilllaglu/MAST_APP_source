@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="18sp"
+        android:text="VULN-34: misc misuse grab-bag" />
+
+    <!--
+         (4) EditText для пароля БЕЗ android:inputType="textPassword".
+             Из-за этого Android keyboard будет учиться на введённом
+             пароле и предлагать его в подсказках. Также скриншоты
+             покажут пароль открытым текстом. Категория R074.
+    -->
+    <EditText
+        android:id="@+id/etPassword"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Password" />
+
+    <EditText
+        android:id="@+id/etCardNumber"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:inputType="number"
+        android:hint="Card number" />
+</LinearLayout>

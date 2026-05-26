@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Vuln16 CredsShipped</string>
+    <!--
+         VULN-16 (часть 2): секрет в strings.xml. Видно в апке через
+         aapt2 dump strings и в любом string-extractor'е.
+    -->
+    <string name="api_secret_token">sk_live_4eC39HqLyjWDarjtT1zdp7dc</string>
+    <string name="hardcoded_admin_password">P@ssw0rd-Admin-2024</string>
+</resources>

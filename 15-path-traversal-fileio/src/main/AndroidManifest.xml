@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="Vuln15 PathTraversal"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+             Activity, читающая имя файла из Intent extras и сразу
+             передающая его в File(...). Если вызывающий передаст
+             "../shared_prefs/secrets.xml" — приложение попытается
+             прочитать чужой файл из своей собственной приватной
+             директории. С учётом того, что Activity exported=true,
+             это means чтение приватных файлов из стороннего приложения.
+        -->
+        <activity
+            android:name=".FileReadActivity"
+            android:exported="true" />
+    </application>
+</manifest>

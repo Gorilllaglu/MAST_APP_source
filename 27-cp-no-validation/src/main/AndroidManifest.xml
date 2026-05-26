@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:label="Vuln27 CpNoValidation"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+             Content Provider, экспортированный без read/write permission,
+             с custom file backend (openFile). Принимает selection и
+             selectionArgs от любого вызывающего как есть и подставляет
+             их в SQLite raw query (SQL injection). Через openFile
+             отдаёт произвольный файл по path-сегменту URI.
+        -->
+        <provider
+            android:name=".UnsafeProvider"
+            android:authorities="com.masttest.vuln27.unsafe"
+            android:exported="true" />
+    </application>
+</manifest>

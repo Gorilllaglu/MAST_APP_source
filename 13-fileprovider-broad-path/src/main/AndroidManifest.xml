@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="Vuln13 FileProviderBroadPath"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+             FileProvider, который раздаёт content:// URI для файлов
+             приложения. Сам по себе FileProvider — стандартный способ
+             делиться файлами с другими приложениями. Уязвимость живёт
+             в res/xml/file_paths.xml, где в качестве отдаваемого корня
+             выбран path="." — это эквивалент «отдать всё, что лежит
+             внутри /data/data/<pkg>/», включая shared_prefs, databases
+             и files. Любое приложение, которому будет передан content://
+             URI с traversal'ом, сможет прочитать произвольный приватный
+             файл.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.masttest.vuln13.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

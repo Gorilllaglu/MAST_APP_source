@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="Vuln09 ExportedActivity"
+        android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
+        android:allowBackup="true">
+
+        <!-- Launcher: legitimately exported via intent-filter MAIN/LAUNCHER. NOT the vulnerability. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+             VULN sink: an activity that handles privileged actions
+             ("delete account", "show internal debug data") is marked
+             exported="true" with NO <intent-filter> and NO permission guard.
+             Any third-party app on the device can call it directly via
+             explicit ComponentName intent.
+        -->
+        <activity
+            android:name=".InternalDebugActivity"
+            android:exported="true" />
+    </application>
+</manifest>

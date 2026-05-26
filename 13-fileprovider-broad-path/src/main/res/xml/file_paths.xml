@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Намеренно слишком широкая конфигурация FileProvider.
+
+  <root-path path="." /> делает корнем «всё, что лежит выше путей
+  data/files-path/cache-path», то есть на практике /data/data/<pkg>/
+  и далее. Включая shared_prefs/, databases/, files/ — все приватные
+  данные приложения становятся достижимы по content://-URI с
+  правильно подобранным relative-path'ом.
+
+  Аналогично подозрительные конфигурации:
+    <files-path path="../" />          — выходит за пределы files/
+    <external-path path="/" />          — отдаёт весь external storage
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <root-path name="root" path="." />
+    <files-path name="files" path="../" />
+    <external-path name="ext" path="/" />
+</paths>
