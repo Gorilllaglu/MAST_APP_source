@@ -1,0 +1,27 @@
+# НЕПРОВЕРЕНО в sastav, и главный подозреваемый в поломке v2.
+# Цель: R4-PROBE-2 (доступ через промежуточную переменную val tc = delegate.trustedComponents).
+# Голое обращение к свойству без вызова метода.
+rules:
+  - id: cerber-trusted-components-property-marker
+    message: >
+      Access to delegate.trustedComponents detected. Broader marker than the
+      call-chain variant: also catches assignment to an intermediate variable.
+    severity: INFO
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: trusted-components-integration
+      confidence: LOW
+      rule_type: marker
+      status: unverified-in-sastav
+    paths:
+      exclude:
+        - "/cerber/"
+        - "/Cerber/"
+        - "/cerbersdk/"
+        - "/CerberSDK/"
+        - "/cerber-sdk/"
+        - "/build/"
+        - "/generated/"
+    pattern: $DELEGATE.trustedComponents
