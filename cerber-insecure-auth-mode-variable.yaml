@@ -1,0 +1,137 @@
+rules:
+  - id: cerber-insecure-auth-mode-variable
+    message: >
+      AuthorizationMode is assigned to a variable, returned from a function, or
+      used in a conditional expression. Variable-based AuthorizationMode values
+      may propagate to CerberSDKApplicationDelegate. Ensure only
+      AuthorizationMode.CERBER is reachable in production code.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: insecure-config-indirect
+      cwe: "CWE-287: Improper Authentication"
+      confidence: MEDIUM
+    pattern-either:
+      - patterns:
+          # Режим привязывается метапеременной $MODE напрямую, а не через $EXPR.
+          # Это нужно, чтобы регекс проверял только имя режима: отрицательный
+          # просмотр вперёд у движка работает в начале выражения и не работает
+          # посередине — прогон 2026-10-23 с просмотром внутри $EXPR дал ноль
+          # находок вместо четырёх. Регекс ниже побайтово тот же, что в
+          # правиле cerber-insecure-auth-mode, где он подтверждённо работает.
+          - pattern-either:
+              - pattern: val $VAR = AuthorizationMode.$MODE
+              - pattern: var $VAR = AuthorizationMode.$MODE
+              - pattern: |
+                  val $VAR: $TYPE = AuthorizationMode.$MODE
+              - pattern: |
+                  var $VAR: $TYPE = AuthorizationMode.$MODE
+              - pattern: internal val $VAR = AuthorizationMode.$MODE
+              - pattern: internal var $VAR = AuthorizationMode.$MODE
+              - pattern: |
+                  internal val $VAR: $TYPE = AuthorizationMode.$MODE
+              - pattern: |
+                  internal var $VAR: $TYPE = AuthorizationMode.$MODE
+              - pattern: $VAR = AuthorizationMode.$MODE
+              - pattern: return AuthorizationMode.$MODE
+              - pattern: if ($COND) AuthorizationMode.$MODE else $OTHER
+              - pattern: if ($COND) $OTHER else AuthorizationMode.$MODE
+          - metavariable-regex:
+              metavariable: $MODE
+              regex: ^(?!CERBER$)[A-Z0-9_]+$
+      - patterns:
+          - pattern: CerberSDKApplicationDelegate(..., $EXPR, ...)
+          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.NONE, ...)
+          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.PINCODE_ONLY, ...)
+          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.CERBER, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: >
+                  val $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  )
+              - pattern: >
+                  var $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal val $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal var $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  val $AUTH_MODE_VAR: $TYPE = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal val $AUTH_MODE_VAR: $TYPE = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  )
+              - pattern: >
+                  fun $FUNC(...): AuthorizationMode {
+                    ...
+                    return $EXPR
+                    ...
+                  }
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    $FUNC(...),
+                    ...
+                  )
+          - metavariable-regex:
+              metavariable: $EXPR
+              # Просмотр вперёд посередине выражения движок не отрабатывает,
+              # поэтому здесь оставлен исходный широкий регекс. Ветвь требует
+              # совпадения объявления и класса с делегированием в одном файле,
+              # то есть срабатывает редко; отсев CERBER делает первая ветвь.
+              regex: (?s).*AuthorizationMode.*
