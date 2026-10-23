@@ -41,11 +41,14 @@ rules:
           - metavariable-regex:
               metavariable: $MODE
               regex: ^(?!CERBER$)[A-Z0-9_]+$
-      - patterns:
-          - pattern: CerberSDKApplicationDelegate(..., $EXPR, ...)
-          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.NONE, ...)
-          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.PINCODE_ONLY, ...)
-          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.CERBER, ...)
+      # Ветвь прямой передачи режима в конструктор удалена 2026-10-23.
+      # Причина: $EXPR в ней ничем не ограничен, ни один регекс на эту ветвь
+      # не действует, поэтому она матчила любой позиционный вызов конструктора.
+      # Исключения описывали режим только первым аргументом, а в реальном
+      # вызове он пятый, и ни одно не применялось. Прогон дал два дубля поверх
+      # находок cerber-insecure-auth-mode и два ложных на безопасном CERBER.
+      # Прямую передачу режима закрывает cerber-insecure-auth-mode — и
+      # позиционную, и именованную. Здесь остаётся только непрямой поток.
       - patterns:
           - pattern-either:
               - pattern: >
