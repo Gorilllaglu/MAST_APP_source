@@ -1,0 +1,252 @@
+rules:
+  - id: cerber-clipboard-write-result-ignored
+    message: >
+      CerberCopyPasteBuffer.write() returns WriteResult (SUCCESS, TRUNCATED,
+      FAILURE) but the result is not checked. Data exceeding 8192 bytes will be
+      silently truncated. Always check WriteResult to handle truncation and
+      failure scenarios.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: clipboard-error-handling
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $BUF.write(...)
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  when ($BUF.write(...)) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  if ($BUF.write(...) == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($BUF.write(...) != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($ANY == $BUF.write(...)) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($ANY != $BUF.write(...)) {
+                    ...
+                  }
+          - patterns:
+              - pattern-either:
+                  - pattern: val $RESULT = $BUF.write(...)
+                  - pattern: var $RESULT = $BUF.write(...)
+                  - pattern: |
+                      val $RESULT: $TYPE = $BUF.write(...)
+                  - pattern: |
+                      var $RESULT: $TYPE = $BUF.write(...)
+                  - pattern: $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              # Сверка результата в return: форма не была покрыта,
+              # из-за неё правило срабатывало на корректном коде.
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  return $RESULT == $ANY
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  return $RESULT != $ANY
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  return $RESULT == $ANY
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  return $RESULT != $ANY
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  return $RESULT == $ANY
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  return $RESULT != $ANY
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  return $RESULT == $ANY
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  return $RESULT != $ANY
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  return $RESULT == $ANY
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  return $RESULT != $ANY
+      - metavariable-regex:
+          metavariable: $BUF
+          regex: .*[Bb]uffer.*|.*[Cc]lipboard.*|.*[Cc]opy[Pp]aste.*
