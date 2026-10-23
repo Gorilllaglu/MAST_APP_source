@@ -1,0 +1,2041 @@
+Доработка правил для SAST по проверкам встраивания CerberSDK
+Kotlin правила - 29 всего 
+1)	cerber-secure-initial-check-disabled – нужно доработать учитывая особенности реализации динамического выставления параметра + доп правило – если динамическое определение то Медиум сработка – проверь што динамически правильно отрабатывает
+rules:
+  - id: cerber-secure-initial-check-disabled
+    message: >
+      CerberSDKApplicationDelegate created with secureInitialCheck=false. This
+      disables root/emulator/jailbreak detection at startup. Attackers on rooted
+      devices can tamper with the application. Set secureInitialCheck=true.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: detection-disabled
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: HIGH
+    pattern-either:
+      - pattern: CerberSDKApplicationDelegate(..., secureInitialCheck = false, ...)
+      - patterns:
+          - pattern: CerberSDKApplicationDelegate(..., secureInitialCheck = $VAR, ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., secureInitialCheck = true, ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., secureInitialCheck = false, ...)
+
+2)	cerber-exported-provider-no-permission – не реализуем  – покрываем фичей с проверкой целостности – переобразовать чтоб проверяла наличие проверки целостности.
+3)	cerber-direct-okhttp-client – отработал - зачем он нужен?? Задача #1 доработать +сделать аналог для Java
+rules:  - id: cerber-direct-okhttp-client    message: >      Direct OkHttpClient creation detected. CerberSDK provides pre-configured      OkHttpClient instances via NetworkSelectRepository with certificate      pinning, auth headers, and bypass detection interceptors. Use      getDefaultOkHttpClient() or getAuthorizedOtpOkHttpClient() instead.    severity: WARNING    languages:      - kotlin    metadata:      category: cerber-sdk-security      subcategory: network-bypass      cwe: "CWE-295: Improper Certificate Validation"      confidence: INFO    pattern-either:      - pattern: OkHttpClient()      - pattern: OkHttpClient.Builder()доработать - посмотри как пининг реализован в Цербере. Можно как-то отлавливать другие клиенты пининга? Нам нужно чтоб в контексте проверок встраивания пининга цербера - мы проверяли что разработчики сделали встраивание нашего пининга корректно или если использовали свой, то это отлавливать TP -  В классе напрямую создаётся клиент через OkHttpClient.Builder(). TP - В методе selectAuthDmzOkHttpClient() напрямую вызывается OkHttpClient.Builder()
+
+4)	cerber-debug-bypass-checker-present – готово
+rules:
+  - id: cerber-debug-bypass-checker-present
+    message: >
+      A call to CerberSDK DebugBypassChecker is present in host-app code. This
+      debug mechanism completely disables root and emulator detection. If this
+      code path is reachable in production, an attacker can bypass all security
+      checks by triggering the debug condition. Remove all debug bypass code
+      from production builds.
+      KNOWN LIMITATION: calls placed inside a property getter are not reported
+      by the engine, see dialect-probes/README.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: debug-bypass
+      cwe: "CWE-489: Active Debug Code"
+      confidence: HIGH
+    pattern-either:
+      - pattern: DebugBypassChecker.shouldBypassRootEmulatorCheck()
+      - pattern: $X.shouldBypassRootEmulatorCheck()
+      - pattern: $X.shouldBypassSecureScreen()
+      - pattern: DebugBypassChecker.$METHOD(...)
+
+5)	cerber-flag-secure-cleared – готово
+rules:
+  - id: cerber-flag-secure-cleared
+    message: >
+      FLAG_SECURE is explicitly cleared. CerberSDK sets FLAG_SECURE on all
+      activities when secureScreen=true. Clearing this flag allows screenshots
+      and screen recording, bypassing the SDK's screen protection policy.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: screen-protection-bypass
+      cwe: "CWE-200: Exposure of Sensitive Information"
+      confidence: HIGH
+    pattern-either:
+      - pattern: $WIN.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+      - pattern: $X.window.clearFlags(8192)
+      - pattern: $WIN.setFlags(0, WindowManager.LayoutParams.FLAG_SECURE)
+
+6)	cerber-secure-check-result-ignored – отлавливает слабо – заменил на то что отлавливает 1 конструкцию - cerber-secure-check-wrong-state-comparison
+rules:
+  - id: cerber-secure-check-wrong-state-comparison
+    message: >
+      SecureChecker.performChecks() result is compared against a single unsafe
+      state instead of DEVICE_COMPLIANT. Every other unsafe state passes this
+      check: comparing against ROOT_DETECTED alone lets EMULATOR_DETECTED and
+      DEVICE_LOCKED through. Compare against DEVICE_COMPLIANT and treat
+      everything else as non-compliant.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: check-result-ignored
+      cwe: "CWE-252: Unchecked Return Value"
+      confidence: HIGH
+    pattern-either:
+      - pattern: $C.performChecks() == SecureCheck.ROOT_DETECTED
+      - pattern: $C.performChecks() != SecureCheck.ROOT_DETECTED
+      - pattern: $C.performChecks() == SecureCheck.EMULATOR_DETECTED
+      - pattern: $C.performChecks() != SecureCheck.EMULATOR_DETECTED
+      - pattern: $C.performChecks() == SecureCheck.DEVICE_LOCKED
+      - pattern: $C.performChecks() != SecureCheck.DEVICE_LOCKED
+
+7)	 cerber-trusted-components-usage-marker – готово
+
+Не уделяем внимания. Корректно сработали - 
+1)	cerber-activity-no-lifecycle-override
+2)	cerber-logout-callback-empty
+3)	cerber-no-auth-detected-ignored
+4)	cerber-root-detected-no-termination
+5)	cerber-root-detection-bypass-attempt
+6)	cerber-user-changed-callback-empty
+7)	cerber-file-received-callback-empty
+
+Ключевая задача. Еще не отработали - 
+1)	cerber-activity-missing-auth-onresume
+rules:
+  - id: cerber-activity-missing-auth-onresume
+    message: >
+      Screen '$ACT' overrides onResume() but does not call
+      requestCerberAuth(this). Every Activity or Fragment must verify CerberSDK
+      authorization in onResume() to prevent unauthorized access when the user
+      returns to the screen (e.g., after switching apps).
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: missing-auth-check
+      cwe: "CWE-862: Missing Authorization"
+      confidence: HIGH
+    patterns:
+      - pattern: |
+          class $ACT : $BASE(...) {
+            ...
+            override fun onResume() {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT : $BASE(...) {
+            ...
+            override fun onResume() {
+              ...
+              $ANY.requestCerberAuth(...)
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT : $BASE(...) {
+            ...
+            override fun onResume() {
+              ...
+              requestCerberAuth(...)
+              ...
+            }
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $ACT
+          regex: .*(Activity|Fragment).*
+
+
+
+cerber-auth-requested-but-not-observedrules:
+  - id: cerber-auth-requested-but-not-observed
+    message: >
+      requestCerberAuth() is called but observeAuthState() is never used in the
+      same class. Without observing auth state, the host app cannot react to
+      authorization changes (Authorized→Pin, timeout, logout). Subscribe to
+      observeAuthState() to handle state transitions properly.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: auth-not-observed
+      cwe: "CWE-862: Missing Authorization"
+      confidence: MEDIUM
+    patterns:
+      - pattern-inside: |
+          class $CLS : $BASE(...) {
+            ...
+          }
+      - pattern: |
+          $ANY.requestCerberAuth(...)
+      - pattern-not-inside: |
+          class $CLS : $BASE(...) {
+            ...
+            override fun $F(...) {
+              ...
+              $ANY2.observeAuthState(...)
+              ...
+            }
+            ...
+          }
+      - pattern-not-inside: |
+          class $CLS : $BASE(...) {
+            ...
+            fun $F(...) {
+              ...
+              $ANY2.observeAuthState(...)
+              ...
+            }
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $CLS
+          regex: .*Activity.*|.*Processor.*|.*Presenter.*|.*ViewModel.*
+
+2)	cerber-clipboard-write-result-ignored
+rules:
+  - id: cerber-clipboard-write-result-ignored
+    message: >
+      CerberCopyPasteBuffer.write() returns WriteResult (SUCCESS, TRUNCATED,
+      FAILURE) but the result is not checked. Data exceeding 8192 bytes will be
+      silently truncated. Always check WriteResult to handle truncation and
+      failure scenarios.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: clipboard-error-handling
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $BUF.write(...)
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  when ($BUF.write(...)) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  if ($BUF.write(...) == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($BUF.write(...) != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($ANY == $BUF.write(...)) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($ANY != $BUF.write(...)) {
+                    ...
+                  }
+          - patterns:
+              - pattern-either:
+                  - pattern: val $RESULT = $BUF.write(...)
+                  - pattern: var $RESULT = $BUF.write(...)
+                  - pattern: |
+                      val $RESULT: $TYPE = $BUF.write(...)
+                  - pattern: |
+                      var $RESULT: $TYPE = $BUF.write(...)
+                  - pattern: $RESULT = $BUF.write(...)
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  when ($RESULT) {
+                    $CASE -> ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  val $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT: $TYPE = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...)
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+      - metavariable-regex:
+          metavariable: $BUF
+          regex: .*[Bb]uffer.*|.*[Cc]lipboard.*|.*[Cc]opy[Pp]aste.*
+
+
+3)	cerber-default-constructor-used
+rules:
+  - id: cerber-default-constructor-used
+    message: >
+      CerberSDKApplicationDelegate() is called with no arguments. Default
+      constructor sets secureInitialCheck=false, secureScreen=false,
+      secureClipboard=false — all security features are disabled by default.
+      Always use the parameterized constructor with explicit security settings.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: insecure-defaults
+      cwe: "CWE-276: Incorrect Default Permissions"
+      confidence: HIGH
+    pattern: CerberSDKApplicationDelegate()
+
+4)	cerber-file-received-no-caller-check
+rules:
+  - id: cerber-file-received-no-caller-check
+    message: >
+      onFileReceived() does not verify the callingPackage parameter. CerberSDK
+      provides the calling package identity — the host app must validate it
+      against a whitelist to prevent unauthorized apps from injecting files via
+      the cerber://transfer/ scheme.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: file-sender-not-verified
+      cwe: "CWE-346: Origin Validation Error"
+      confidence: MEDIUM
+    patterns:
+      - pattern: |
+          override fun onFileReceived($URI: Uri, $PKG: String) {
+            ...
+          }
+      - pattern-not: |
+          override fun onFileReceived($URI: Uri, $PKG: String) {
+            ...
+            $PKG == $WHITELIST
+            ...
+          }
+      - pattern-not: |
+          override fun onFileReceived($URI: Uri, $PKG: String) {
+            ...
+            $WHITELIST == $PKG
+            ...
+          }
+      - pattern-not: |
+          override fun onFileReceived($URI: Uri, $PKG: String) {
+            ...
+            $PKG.equals(...)
+            ...
+          }
+      - pattern-not: |
+          override fun onFileReceived($URI: Uri, $PKG: String) {
+            ...
+            $X.contains($PKG)
+            ...
+          }
+      - pattern-not: |
+          override fun onFileReceived($URI: Uri, $PKG: String) {
+            ...
+            $PKG in $Y
+            ...
+          }
+      - pattern-not: |
+          override fun onFileReceived($URI: Uri, $PKG: String) { }
+
+
+5)	cerber-insecure-auth-mode
+rules:
+  - id: cerber-insecure-auth-mode
+    message: >
+      CerberSDKApplicationDelegate is initialized with a non-CERBER
+      AuthorizationMode. Non-CERBER authorization modes may disable or weaken
+      SDK authorization. Use AuthorizationMode.CERBER in production code.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: insecure-config
+      cwe: "CWE-287: Improper Authentication"
+      confidence: HIGH
+    patterns:
+      - pattern: $METHOD(..., AuthorizationMode.$MODE, ...)
+      - metavariable-regex:
+          metavariable: $MODE
+          regex: ^(?!CERBER$)[A-Z0-9_]+$
+
+6)	cerber-insecure-auth-mode-variable
+rules:
+  - id: cerber-insecure-auth-mode-variable
+    message: >
+      AuthorizationMode is assigned to a variable, returned from a function, or
+      used in a conditional expression. Variable-based AuthorizationMode values
+      may propagate to CerberSDKApplicationDelegate. Ensure only
+      AuthorizationMode.CERBER is reachable in production code.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: insecure-config-indirect
+      cwe: "CWE-287: Improper Authentication"
+      confidence: MEDIUM
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: val $VAR = $EXPR
+              - pattern: var $VAR = $EXPR
+              - pattern: |
+                  val $VAR: $TYPE = $EXPR
+              - pattern: |
+                  var $VAR: $TYPE = $EXPR
+              - pattern: internal val $VAR = $EXPR
+              - pattern: internal var $VAR = $EXPR
+              - pattern: |
+                  internal val $VAR: $TYPE = $EXPR
+              - pattern: |
+                  internal var $VAR: $TYPE = $EXPR
+              - pattern: $VAR = $EXPR
+              - pattern: return $EXPR
+              - pattern: if ($COND) $EXPR else $OTHER
+              - pattern: if ($COND) $OTHER else $EXPR
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: \bAuthorizationMode\.[A-Z0-9_]+\b
+      - patterns:
+          - pattern: CerberSDKApplicationDelegate(..., $EXPR, ...)
+          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.NONE, ...)
+          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.PINCODE_ONLY, ...)
+          - pattern-not: CerberSDKApplicationDelegate(AuthorizationMode.CERBER, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: >
+                  val $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  )
+              - pattern: >
+                  var $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal val $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal var $AUTH_MODE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  val $AUTH_MODE_VAR: $TYPE = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal val $AUTH_MODE_VAR: $TYPE = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $AUTH_MODE_VAR,
+                    ...
+                  )
+              - pattern: >
+                  fun $FUNC(...): AuthorizationMode {
+                    ...
+                    return $EXPR
+                    ...
+                  }
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    $FUNC(...),
+                    ...
+                  )
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: (?s).*AuthorizationMode.*
+
+
+7)	cerber-insecure-clipboard-disabled
+rules:
+  - id: cerber-insecure-clipboard-disabled
+    message: >
+      CerberSDKApplicationDelegate created with secureClipboard=false. This
+      allows copy-paste of sensitive data from the application. Set
+      secureClipboard=true to enable encrypted clipboard protection.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: clipboard-unprotected
+      cwe: "CWE-200: Exposure of Sensitive Information"
+      confidence: HIGH
+    pattern-either:
+      - pattern: CerberSDKApplicationDelegate(..., secureClipboard = false, ...)
+      - patterns:
+          - pattern: CerberSDKApplicationDelegate(..., secureClipboard = $VAR, ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., secureClipboard = true, ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., secureClipboard = false, ...)
+
+8)	cerber-insecure-screen-disabled
+rules:
+  - id: cerber-insecure-screen-disabled
+    message: >
+      CerberSDKApplicationDelegate created with secureScreen=false. This allows
+      screenshots and screen recording of the application, potentially exposing
+      sensitive corporate data. Set secureScreen=true to apply FLAG_SECURE on
+      all activities.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: screen-capture-enabled
+      cwe: "CWE-200: Exposure of Sensitive Information"
+      confidence: HIGH
+    pattern-either:
+      - pattern: CerberSDKApplicationDelegate(..., secureScreen = false, ...)
+      - patterns:
+          - pattern: CerberSDKApplicationDelegate(..., secureScreen = $VAR, ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., secureScreen = true, ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., secureScreen = false, ...)
+
+
+9)	cerber-isolated-service-not-isolated
+rules:
+  - id: cerber-isolated-service-not-isolated
+    message: >
+      CerberSDK IsolatedService is declared without
+      android:isolatedProcess="true". The isolated process runs root detection
+      in a separate process that cannot be hooked by Frida attached to the main
+      app process. Without isolation, an attacker can hook native detection
+      functions from the main process.
+    severity: ERROR
+    languages:
+      - xml
+    metadata:
+      category: cerber-sdk-security
+      subcategory: detection-not-isolated
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: HIGH
+    patterns:
+      - pattern: |
+          <service android:name="$SERVICE_NAME" ... />
+      - metavariable-regex:
+          metavariable: $SERVICE_NAME
+          regex: .*IsolatedService.*
+      - pattern-not: >
+          <service android:name="$SERVICE_NAME" android:isolatedProcess="true"
+          ... />
+
+
+10)	cerber-missing-delegate-creation
+rules:
+  - id: cerber-missing-delegate-creation
+    message: >
+      Class implements CerberSDKApplication via delegation, but the delegate is
+      not a fresh CerberSDKApplicationDelegate(...) instance. The delegate must
+      be instantiated with explicit security parameters, not obtained from an
+      external source (e.g., DI, field, getter).
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-integration
+      subcategory: missing-delegate
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $APP : CerberSDKApplication by $DELEGATE {
+                ...
+              }
+          - pattern: |
+              class $APP : $BASE, CerberSDKApplication by $DELEGATE {
+                ...
+              }
+          - pattern: |
+              class $APP : CerberSDKApplication by $DELEGATE, $OTHER {
+                ...
+              }
+          - pattern: |
+              class $APP : $BASE, CerberSDKApplication by $DELEGATE, $OTHER {
+                ...
+              }
+      - metavariable-pattern:
+          metavariable: $DELEGATE
+          patterns:
+            - pattern-not: CerberSDKApplicationDelegate(...)
+
+
+11)	cerber-missing-sdk-application-interface
+rules:
+  - id: cerber-missing-sdk-application-interface
+    message: >
+      Application class extends Application but does not implement
+      CerberSDKApplication. CerberSDK requires the host Application class to
+      implement CerberSDKApplication interface for proper initialization.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-integration
+      subcategory: missing-integration
+      cwe: "CWE-778: Insufficient Logging"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $APP : Application() {
+                ...
+              }
+          - pattern: |
+              class $APP : Application(), $INTERFACE {
+                ...
+              }
+          - pattern: |
+              class $APP : Application(), $INTERFACE1, $INTERFACE2 {
+                ...
+              }
+      - pattern-not: |
+          class $APP : Application(), CerberSDKApplication {
+            ...
+          }
+      - pattern-not: >
+          class $APP : Application(), CerberSDKApplication by
+          CerberSDKApplicationDelegate(...) {
+            ...
+          }
+      - pattern-not: |
+          class $APP : Application(), $OTHER, CerberSDKApplication {
+            ...
+          }
+      - pattern-not: >
+          class $APP : Application(), $OTHER, CerberSDKApplication by
+          CerberSDKApplicationDelegate(...) {
+            ...
+          }
+
+
+12)	cerber-non-production-build-type (!!!)
+rules:
+  - id: cerber-non-production-build-type
+    message: >
+      Non-production BuildType detected in CerberSDKApplicationDelegate
+      constructor. Dev/test build types use different API endpoints, weaker SSL
+      pinning, and shorter timebomb intervals (10 min vs 14 days). Ensure
+      production builds use BuildType.PROM.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: non-prod-config
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: CerberSDKApplicationDelegate(..., BuildType.DEV1, ...)
+          - pattern: CerberSDKApplicationDelegate(..., BuildType.DEV2, ...)
+          - pattern: CerberSDKApplicationDelegate(..., BuildType.IFT, ...)
+          - pattern: CerberSDKApplicationDelegate(..., BuildType.PSI, ...)
+          - pattern: CerberSDKApplicationDelegate(..., buildType = BuildType.DEV1, ...)
+          - pattern: CerberSDKApplicationDelegate(..., buildType = BuildType.DEV2, ...)
+          - pattern: CerberSDKApplicationDelegate(..., buildType = BuildType.IFT, ...)
+          - pattern: CerberSDKApplicationDelegate(..., buildType = BuildType.PSI, ...)
+      - pattern-not: CerberSDKApplicationDelegate(..., BuildType.PROM, ...)
+      - pattern-not: CerberSDKApplicationDelegate(..., buildType = BuildType.PROM, ...)
+
+
+13)	cerber-non-production-build-type-variable (!!!)
+rules:
+  - id: cerber-non-production-build-type-variable
+    message: >
+      Non-production BuildType (DEV1/DEV2/IFT/PSI) is assigned to a variable,
+      returned from a function, or used in a conditional expression. This value
+      may propagate to CerberSDKApplicationDelegate. In production builds, only
+      BuildType.PROM must be reachable.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: non-prod-config-indirect
+      confidence: MEDIUM
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: val $VAR = $EXPR
+              - pattern: var $VAR = $EXPR
+              - pattern: |
+                  val $VAR: $TYPE = $EXPR
+              - pattern: |
+                  var $VAR: $TYPE = $EXPR
+              - pattern: internal val $VAR = $EXPR
+              - pattern: internal var $VAR = $EXPR
+              - pattern: |
+                  internal val $VAR: $TYPE = $EXPR
+              - pattern: |
+                  internal var $VAR: $TYPE = $EXPR
+              - pattern: $VAR = $EXPR
+              - pattern: return $EXPR
+              - pattern: if ($COND) $EXPR else $OTHER
+              - pattern: if ($COND) $OTHER else $EXPR
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: \bBuildType\.(DEV1|DEV2|IFT|PSI)\b
+      - patterns:
+          - pattern: CerberSDKApplicationDelegate(..., $EXPR, ...)
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: \bBuildType\.(DEV1|DEV2|IFT|PSI)\b
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: (?s)^(?!\s*BuildType\.(DEV1|DEV2|IFT|PSI)\s*$).*
+      - patterns:
+          - pattern-either:
+              - pattern: >
+                  val $BUILD_TYPE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $BUILD_TYPE_VAR,
+                    ...
+                  )
+              - pattern: >
+                  var $BUILD_TYPE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $BUILD_TYPE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal val $BUILD_TYPE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $BUILD_TYPE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal var $BUILD_TYPE_VAR = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $BUILD_TYPE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  val $BUILD_TYPE_VAR: $TYPE = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $BUILD_TYPE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  internal val $BUILD_TYPE_VAR: $TYPE = $EXPR
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $BUILD_TYPE_VAR,
+                    ...
+                  ) 
+              - pattern: >
+                  fun $FUNC(...): BuildType {
+                    ...
+                    return $EXPR
+                    ...
+                  }
+
+                  ...
+
+                  class $APP : Application(), CerberSDKApplication by
+                  CerberSDKApplicationDelegate(
+                    ...,
+                    $FUNC(...),
+                    ...
+                  )
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: (?s).*BuildType.*
+
+
+14)	cerber-passwordless-auth-disabled
+rules:
+  - id: cerber-passwordless-auth-disabled
+    message: >
+      CerberSDKApplicationDelegate created with disablePasswordlessAuth=true.
+      This disables OTP-based passwordless authentication via SberStore, forcing
+      users to use less secure auth methods.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: auth-degraded
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: CerberSDKApplicationDelegate(..., disablePasswordlessAuth = true, ...)
+      - patterns:
+          - pattern: CerberSDKApplicationDelegate(..., disablePasswordlessAuth = $VAR, ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., disablePasswordlessAuth = true,
+              ...)
+          - pattern-not: CerberSDKApplicationDelegate(..., disablePasswordlessAuth = false,
+              ...)
+
+Этап 2. Java правила - 26 всего (2 не разработаны)
+Проверены - 
+1)	cerber-debug-bypass-checker-present-java
+2)	cerber-flag-secure-cleared-java
+3)	cerber-secure-check-wrong-state-comparison-java
+4)	cerber-trusted-components-usage-marker-java
+Необходимо сделать код и возможно доработать - 
+1)	cerber-java-activity-missing-auth-onresume
+rules:
+  - id: cerber-java-activity-missing-auth-onresume
+    message: >
+      Screen '$ACT' overrides onResume() but does not call
+      requestCerberAuth(this). Every Activity or Fragment must verify CerberSDK
+      authorization in onResume() to prevent unauthorized access when the user
+      returns to the screen (e.g., after switching apps).
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: missing-auth-check
+      cwe: "CWE-862: Missing Authorization"
+      confidence: HIGH
+    patterns:
+      - pattern: |
+          class $ACT extends $BASE {
+            ...
+            void onResume() {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT extends $BASE {
+            ...
+            void onResume() {
+              ...
+              $ANY.requestCerberAuth(...);
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT extends $BASE {
+            ...
+            void onResume() {
+              ...
+              requestCerberAuth(...);
+              ...
+            }
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $ACT
+          regex: .*(Activity|Fragment).*
+
+2)	cerber-java-default-constructor-used
+rules:
+  - id: cerber-java-default-constructor-used
+    message: >
+      new CerberSDKApplicationDelegate() is called with no arguments. Default
+      constructor sets secureInitialCheck=false, secureScreen=false,
+      secureClipboard=false — all security features are disabled by default.
+      Always use the parameterized constructor with explicit security settings.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: insecure-defaults
+      cwe: "CWE-276: Incorrect Default Permissions"
+      confidence: HIGH
+    pattern: new CerberSDKApplicationDelegate()
+
+3)	cerber-java-insecure-auth-mode
+rules:
+  - id: cerber-java-insecure-auth-mode
+    message: >
+      CerberSDKApplicationDelegate is initialized with a non-CERBER
+      AuthorizationMode. Non-CERBER authorization modes may disable or weaken
+      SDK authorization. Use AuthorizationMode.CERBER in production code.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: insecure-config
+      cwe: "CWE-287: Improper Authentication"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: new $CLASS(..., AuthorizationMode.$MODE, ...)
+          - pattern: $METHOD(..., AuthorizationMode.$MODE, ...)
+      - metavariable-regex:
+          metavariable: $MODE
+          regex: ^(?!CERBER$)[A-Z0-9_]+$
+
+
+4)	cerber-java-insecure-clipboard-disabled
+rules:
+  - id: cerber-java-insecure-clipboard-disabled
+    message: >
+      CerberSDKApplicationDelegate created with secureClipboard=false. This
+      allows copy-paste of sensitive data from the application. Set
+      secureClipboard=true to enable encrypted clipboard protection.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: clipboard-unprotected
+      cwe: "CWE-200: Exposure of Sensitive Information"
+      confidence: HIGH
+    pattern-either:
+      - pattern: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, false, ...)
+      - patterns:
+          - pattern: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $VAR, ...)
+          - pattern-not: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, true, ...)
+          - pattern-not: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, false, ...)
+
+5)	cerber-java-insecure-screen-disabled
+rules:
+  - id: cerber-java-insecure-screen-disabled
+    message: >
+      CerberSDKApplicationDelegate created with secureScreen=false. This allows
+      screenshots and screen recording of the application, potentially exposing
+      sensitive corporate data. Set secureScreen=true to apply FLAG_SECURE on
+      all activities.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: screen-capture-enabled
+      cwe: "CWE-200: Exposure of Sensitive Information"
+      confidence: HIGH
+    pattern-either:
+      - pattern: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD,
+          $INITCHECK, false, ...)
+      - patterns:
+          - pattern: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD,
+              $INITCHECK, $VAR, ...)
+          - pattern-not: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD,
+              $INITCHECK, true, ...)
+          - pattern-not: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD,
+              $INITCHECK, false, ...)
+
+
+6)	cerber-java-missing-sdk-application-interface
+rules:
+  - id: cerber-java-missing-sdk-application-interface
+    message: >
+      Application class extends Application but does not implement
+      CerberSDKApplication. CerberSDK requires the host Application class to
+      implement CerberSDKApplication interface for proper initialization.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-integration
+      subcategory: missing-integration
+      cwe: "CWE-778: Insufficient Logging"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $APP extends Application {
+                ...
+              }
+          - pattern: |
+              class $APP extends Application implements $INTERFACE {
+                ...
+              }
+          - pattern: >
+              class $APP extends Application implements $INTERFACE1, $INTERFACE2
+              {
+                ...
+              }
+      - pattern-not: |
+          class $APP extends Application implements CerberSDKApplication {
+            ...
+          }
+      - pattern-not: >
+          class $APP extends Application implements $OTHER, CerberSDKApplication
+          {
+            ...
+          }
+
+
+7)	cerber-java-non-production-build-type
+rules:
+  - id: cerber-java-non-production-build-type
+    message: >
+      Non-production BuildType detected in CerberSDKApplicationDelegate
+      constructor. Dev/test build types use different API endpoints, weaker SSL
+      pinning, and shorter timebomb intervals (10 min vs 14 days). Ensure
+      production builds use BuildType.PROM.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: non-prod-config
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: new CerberSDKApplicationDelegate(..., BuildType.DEV1, ...)
+          - pattern: new CerberSDKApplicationDelegate(..., BuildType.DEV2, ...)
+          - pattern: new CerberSDKApplicationDelegate(..., BuildType.IFT, ...)
+          - pattern: new CerberSDKApplicationDelegate(..., BuildType.PSI, ...)
+      - pattern-not: new CerberSDKApplicationDelegate(..., BuildType.PROM, ...)
+
+8)	cerber-java-secure-initial-check-disabled
+rules:
+  - id: cerber-java-secure-initial-check-disabled
+    message: >
+      CerberSDKApplicationDelegate created with secureInitialCheck=false. This
+      disables root/emulator/jailbreak detection at startup. Attackers on rooted
+      devices can tamper with the application. Set secureInitialCheck=true.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: detection-disabled
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: HIGH
+    pattern-either:
+      - pattern: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD, false,
+          ...)
+      - patterns:
+          - pattern: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD, $VAR,
+              ...)
+          - pattern-not: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD,
+              true, ...)
+          - pattern-not: new CerberSDKApplicationDelegate($MODE, $BUILDTYPE, $CLIPBOARD,
+              false, ...)
+
+9)	cerber-java-activity-no-lifecycle-override
+rules:
+  - id: cerber-java-activity-no-lifecycle-override
+    message: >
+      Activity '$ACT' does not override onResume(). Without an onResume()
+      override, CerberSDK authorization cannot be checked when the user returns
+      to this screen. Add onResume() with requestCerberAuth(this).
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: missing-lifecycle
+      cwe: "CWE-862: Missing Authorization"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $ACT extends $BASE {
+                ...
+              }
+          - pattern: |
+              class $ACT extends $BASE implements $INTERFACE {
+                ...
+              }
+          - pattern: |
+              class $ACT extends $BASE implements $INTERFACE1, $INTERFACE2 {
+                ...
+              }
+      - pattern-not: |
+          class $ACT extends $BASE {
+            ...
+            void onResume() {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT extends $BASE implements $INTERFACE {
+            ...
+            void onResume() {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT extends $BASE implements $INTERFACE1, $INTERFACE2 {
+            ...
+            void onResume() {
+              ...
+            }
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $ACT
+          regex: .*Activity.*
+      - metavariable-regex:
+          metavariable: $BASE
+          regex: .*(Activity|AppCompatActivity|FragmentActivity|ComponentActivity).*
+
+10)	cerber-java-auth-requested-but-not-observed
+rules:
+  - id: cerber-java-auth-requested-but-not-observed
+    message: >
+      requestCerberAuth() is called but observeAuthState() is never used in the
+      same class. Without observing auth state, the host app cannot react to
+      authorization changes (Authorized→Pin, timeout, logout). Subscribe to
+      observeAuthState() to handle state transitions properly.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: auth-not-observed
+      cwe: "CWE-862: Missing Authorization"
+      confidence: MEDIUM
+    patterns:
+      - pattern-inside: |
+          class $CLS extends $BASE {
+            ...
+          }
+      - pattern: |
+          $ANY.requestCerberAuth(...);
+      - pattern-not-inside: |
+          class $CLS extends $BASE {
+            ...
+            $RTYPE $F(...) {
+              ...
+              $ANY2.observeAuthState(...);
+              ...
+            }
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $CLS
+          regex: .*Activity.*|.*Processor.*|.*Presenter.*|.*ViewModel.*
+
+11)	cerber-java-clipboard-write-result-ignored
+rules:
+  - id: cerber-java-clipboard-write-result-ignored
+    message: >
+      CerberCopyPasteBuffer.write() returns WriteResult (SUCCESS, TRUNCATED,
+      FAILURE) but the result is not checked. Data exceeding 8192 bytes will be
+      silently truncated. Always check WriteResult to handle truncation and
+      failure scenarios.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: clipboard-error-handling
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $BUF.write(...)
+              - pattern-not-inside: |
+                  $TYPE $RESULT = $BUF.write(...);
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...);
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...);
+              - pattern-not-inside: |
+                  switch ($BUF.write(...)) {
+                    case $CASE:
+                      ...
+                  }
+              - pattern-not-inside: |
+                  if ($BUF.write(...) == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($BUF.write(...) != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($ANY == $BUF.write(...)) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  if ($ANY != $BUF.write(...)) {
+                    ...
+                  }
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      $TYPE $RESULT = $BUF.write(...);
+                  - pattern: |
+                      var $RESULT = $BUF.write(...);
+                  - pattern: $RESULT = $BUF.write(...);
+              - pattern-not-inside: |
+                  $TYPE $RESULT = $BUF.write(...);
+                  ...
+                  switch ($RESULT) {
+                    case $CASE:
+                      ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...);
+                  ...
+                  switch ($RESULT) {
+                    case $CASE:
+                      ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...);
+                  ...
+                  switch ($RESULT) {
+                    case $CASE:
+                      ...
+                  }
+              - pattern-not-inside: |
+                  $TYPE $RESULT = $BUF.write(...);
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $TYPE $RESULT = $BUF.write(...);
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $TYPE $RESULT = $BUF.write(...);
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $TYPE $RESULT = $BUF.write(...);
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...);
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...);
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...);
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  var $RESULT = $BUF.write(...);
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...);
+                  ...
+                  if ($RESULT == $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...);
+                  ...
+                  if ($RESULT != $ANY) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...);
+                  ...
+                  if ($ANY == $RESULT) {
+                    ...
+                  }
+              - pattern-not-inside: |
+                  $RESULT = $BUF.write(...);
+                  ...
+                  if ($ANY != $RESULT) {
+                    ...
+                  }
+      - metavariable-regex:
+          metavariable: $BUF
+          regex: .*[Bb]uffer.*|.*[Cc]lipboard.*|.*[Cc]opy[Pp]aste.*
+
+
+12)	cerber-java-file-received-no-caller-check
+rules:
+  - id: cerber-java-file-received-no-caller-check
+    message: >
+      onFileReceived() does not verify the callingPackage parameter. CerberSDK
+      provides the calling package identity — the host app must validate it
+      against a whitelist to prevent unauthorized apps from injecting files via
+      the cerber://transfer/ scheme.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: file-sender-not-verified
+      cwe: "CWE-346: Origin Validation Error"
+      confidence: MEDIUM
+    patterns:
+      - pattern: |
+          void onFileReceived(Uri $URI, String $PKG) {
+            ...
+          }
+      - pattern-not: |
+          void onFileReceived(Uri $URI, String $PKG) {
+            ...
+            if ($PKG == $WHITELIST) {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          void onFileReceived(Uri $URI, String $PKG) {
+            ...
+            if ($WHITELIST == $PKG) {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          void onFileReceived(Uri $URI, String $PKG) {
+            ...
+            $PKG.equals(...);
+            ...
+          }
+      - pattern-not: |
+          void onFileReceived(Uri $URI, String $PKG) {
+            ...
+            if ($PKG.equals(...)) {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          void onFileReceived(Uri $URI, String $PKG) {
+            ...
+            $X.contains($PKG);
+            ...
+          }
+      - pattern-not: |
+          void onFileReceived(Uri $URI, String $PKG) {
+            ...
+            if ($X.contains($PKG)) {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          void onFileReceived(Uri $URI, String $PKG) { }
+
+
+13)	cerber-java-insecure-auth-mode-variable
+rules:
+  - id: cerber-java-insecure-auth-mode-variable
+    message: >
+      AuthorizationMode is assigned to a variable, returned from a method, or
+      used in a conditional expression. Variable-based AuthorizationMode values
+      may propagate to CerberSDKApplicationDelegate. Ensure only
+      AuthorizationMode.CERBER is reachable in production code.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: insecure-config-indirect
+      cwe: "CWE-287: Improper Authentication"
+      confidence: MEDIUM
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $TYPE $VAR = $EXPR;
+              - pattern: var $VAR = $EXPR;
+              - pattern: $VAR = $EXPR;
+              - pattern: return $EXPR;
+              - pattern: |
+                  $COND ? $EXPR : $OTHER
+              - pattern: |
+                  $COND ? $OTHER : $EXPR
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: \bAuthorizationMode\.[A-Z0-9_]+\b
+      - patterns:
+          - pattern: new CerberSDKApplicationDelegate(..., $EXPR, ...)
+          - pattern-not: new CerberSDKApplicationDelegate(AuthorizationMode.NONE, ...)
+          - pattern-not: new CerberSDKApplicationDelegate(AuthorizationMode.PINCODE_ONLY,
+              ...)
+          - pattern-not: new CerberSDKApplicationDelegate(AuthorizationMode.CERBER, ...)
+      - patterns:
+          - pattern-either:
+              - pattern: >
+                  class $APP {
+                    ...
+                    $TYPE $AUTH_MODE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $AUTH_MODE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    $TYPE $AUTH_MODE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $AUTH_MODE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP {
+                    ...
+                    var $AUTH_MODE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $AUTH_MODE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    var $AUTH_MODE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $AUTH_MODE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $FUNC(...), ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $FUNC(...), ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE $VAR = $FUNC(...);
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE $VAR = $FUNC(...);
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $VAR, ...);
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: (?s).*AuthorizationMode.*
+
+14)	cerber-java-logout-callback-empty
+rules:
+  - id: cerber-java-logout-callback-empty
+    message: >
+      onLogout() callback has an empty implementation. The app must handle
+      logout events from CerberSDK by clearing sensitive data from memory and
+      navigating to a safe screen.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: logout-ignored
+      confidence: MEDIUM
+    pattern: |
+      void onLogout() { }
+
+15)	cerber-java-missing-delegate-creation
+rules:
+  - id: cerber-java-missing-delegate-creation
+    message: >
+      Class implements CerberSDKApplication via a delegate field, but the field
+      is not a fresh CerberSDKApplicationDelegate(...) instance. The delegate
+      must be instantiated with explicit security parameters, not obtained from
+      an external source (e.g., DI, field, getter).
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-integration
+      subcategory: missing-delegate
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $APP implements CerberSDKApplication {
+                ...
+                $TYPE $DELEGATE = $EXPR;
+                ...
+              }
+          - pattern: |
+              class $APP extends $BASE implements CerberSDKApplication {
+                ...
+                $TYPE $DELEGATE = $EXPR;
+                ...
+              }
+          - pattern: |
+              class $APP implements CerberSDKApplication, $OTHER {
+                ...
+                $TYPE $DELEGATE = $EXPR;
+                ...
+              }
+          - pattern: |
+              class $APP extends $BASE implements CerberSDKApplication, $OTHER {
+                ...
+                $TYPE $DELEGATE = $EXPR;
+                ...
+              }
+      - metavariable-regex:
+          metavariable: $DELEGATE
+          regex: (?i).*delegate.*
+      - metavariable-pattern:
+          metavariable: $EXPR
+          patterns:
+            - pattern-not: new CerberSDKApplicationDelegate(...)
+
+
+16)	cerber-java-no-auth-detected-ignored
+rules:
+  - id: cerber-java-no-auth-detected-ignored
+    message: >
+      onNoAuthDetected() callback has an empty implementation. When CerberSDK
+      reports no authorization, the app must handle this event — typically by
+      redirecting to login or restricting access to sensitive screens.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: auth-event-ignored
+      cwe: "CWE-287: Improper Authentication"
+      confidence: MEDIUM
+    pattern: |
+      void onNoAuthDetected() { }
+
+17)	cerber-java-non-production-build-type-variable
+rules:
+  - id: cerber-java-non-production-build-type-variable
+    message: >
+      Non-production BuildType (DEV1/DEV2/IFT/PSI) is assigned to a variable,
+      returned from a method, or used in a conditional expression. This value
+      may propagate to CerberSDKApplicationDelegate. In production builds, only
+      BuildType.PROM must be reachable.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: non-prod-config-indirect
+      confidence: MEDIUM
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: $TYPE $VAR = $EXPR;
+              - pattern: var $VAR = $EXPR;
+              - pattern: $VAR = $EXPR;
+              - pattern: return $EXPR;
+              - pattern: |
+                  $COND ? $EXPR : $OTHER
+              - pattern: |
+                  $COND ? $OTHER : $EXPR
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: \bBuildType\.(DEV1|DEV2|IFT|PSI)\b
+      - patterns:
+          - pattern: new CerberSDKApplicationDelegate(..., $EXPR, ...)
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: \bBuildType\.(DEV1|DEV2|IFT|PSI)\b
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: (?s)^(?!\s*BuildType\.(DEV1|DEV2|IFT|PSI)\s*$).*
+      - patterns:
+          - pattern-either:
+              - pattern: >
+                  class $APP {
+                    ...
+                    $TYPE $BUILD_TYPE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $BUILD_TYPE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    $TYPE $BUILD_TYPE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $BUILD_TYPE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP {
+                    ...
+                    var $BUILD_TYPE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $BUILD_TYPE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    var $BUILD_TYPE_VAR = $EXPR;
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $BUILD_TYPE_VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $FUNC(...), ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $FUNC(...), ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE $VAR = $FUNC(...);
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $VAR, ...);
+                    ...
+                  }
+              - pattern: >
+                  class $APP extends $BASE {
+                    ...
+                    $RTYPE $FUNC(...) {
+                      ...
+                      return $EXPR;
+                      ...
+                    }
+                    ...
+                    $TYPE $VAR = $FUNC(...);
+                    ...
+                    $TYPE2 $FIELD2 = new CerberSDKApplicationDelegate(..., $VAR, ...);
+                    ...
+                  }
+          - metavariable-regex:
+              metavariable: $EXPR
+              regex: (?s).*BuildType.*
+
+
+18)	cerber-java-passwordless-auth-disabled
+rules:
+  - id: cerber-java-passwordless-auth-disabled
+    message: >
+      CerberSDKApplicationDelegate created with disablePasswordlessAuth=true.
+      This disables OTP-based passwordless authentication via SberStore, forcing
+      users to use less secure auth methods.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: auth-degraded
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: new CerberSDKApplicationDelegate(..., true)
+      - patterns:
+          - pattern: new CerberSDKApplicationDelegate(..., $VAR)
+          - pattern-not: new CerberSDKApplicationDelegate(..., true)
+          - pattern-not: new CerberSDKApplicationDelegate(..., false)
+
+
+19)	cerber-java-root-detected-no-termination
+rules:
+  - id: cerber-java-root-detected-no-termination
+    message: >
+      onRootDetected() has an implementation but does not terminate the app.
+      CerberSDK's DeviceNotSecureActivity can be bypassed via Frida by hooking
+      ContextWrapper.startActivity(). The host app's onRootDetected() callback
+      is the last line of defense — it must call System.exit(),
+      Runtime.getRuntime().exit(), Process.killProcess(), or at minimum finish()
+      all activities to prevent continued use on rooted device.
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: root-detection-weak-response
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              void onRootDetected() {
+                ...
+              }
+          - pattern: |
+              void onRootDetected() { }
+      - pattern-not: |
+          void onRootDetected() {
+            ...
+            System.exit(...);
+            ...
+          }
+      - pattern-not: |
+          void onRootDetected() {
+            ...
+            Runtime.getRuntime().exit(...);
+            ...
+          }
+      - pattern-not: |
+          void onRootDetected() {
+            ...
+            $PROCESS.killProcess(...);
+            ...
+          }
+      - pattern-not: |
+          void onRootDetected() {
+            ...
+            finish();
+            ...
+          }
+      - pattern-not: |
+          void onRootDetected() {
+            ...
+            finishAffinity();
+            ...
+          }
+      - pattern-not: |
+          void onRootDetected() {
+            ...
+            finishAndRemoveTask();
+            ...
+          }
+
+20)	cerber-java-root-detection-bypass-attempt
+rules:
+  - id: cerber-java-root-detection-bypass-attempt
+    message: >
+      CerberSDK root detection callback onRootDetected() has an empty
+      implementation. Root detection events must be handled properly (e.g.,
+      terminate the application or restrict functionality).
+    severity: ERROR
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: detection-bypass
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: |
+          void onRootDetected() { }
+      - pattern: |
+          void onRootDetected() {
+              return;
+          }
+
+
+21)	cerber-java-user-changed-callback-empty
+rules:
+  - id: cerber-java-user-changed-callback-empty
+    message: >
+      onUserChanged() callback has an empty implementation. When CerberSDK
+      detects a user change, the app must clear cached user-specific data and
+      reset state to prevent data leakage between accounts.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: user-change-ignored
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: |
+          void onUserChanged() { }
+      - pattern: |
+          void onUserChanged() {
+              return;
+          }
+
+
+22)	cerber-java-file-received-callback-empty
+rules:
+  - id: cerber-java-file-received-callback-empty
+    message: >
+      onFileReceived() callback has an empty implementation. CerberSDK's secure
+      file transfer sends files through CerberTransferActivity and notifies the
+      host app via this callback. An empty implementation means received files
+      are silently dropped.
+    severity: WARNING
+    languages:
+      - java
+    metadata:
+      category: cerber-sdk-security
+      subcategory: file-transfer-ignored
+      confidence: INFO
+    pattern: |
+      void onFileReceived(Uri $URI, String $PKG) { }
+
+
+
+
+Этап 3. Дополнительные правила по методике – нужно решение от CerberSDK
+
+
