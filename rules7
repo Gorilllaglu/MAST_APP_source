@@ -1,0 +1,252 @@
+rules:
+  - id: cerber-activity-no-lifecycle-override
+    message: >
+      Activity '$ACT' does not override onResume(). Without an onResume()
+      override, CerberSDK authorization cannot be checked when the user returns
+      to this screen. Add onResume() with requestCerberAuth(this).
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: missing-lifecycle
+      cwe: "CWE-862: Missing Authorization"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $ACT : $BASE(...) {
+                ...
+              }
+          - pattern: |
+              class $ACT : $BASE(...), $INTERFACE {
+                ...
+              }
+          - pattern: |
+              class $ACT : $BASE(...), $INTERFACE1, $INTERFACE2 {
+                ...
+              }
+      - pattern-not: |
+          class $ACT : $BASE(...) {
+            ...
+            override fun onResume() {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT : $BASE(...), $INTERFACE {
+            ...
+            override fun onResume() {
+              ...
+            }
+            ...
+          }
+      - pattern-not: |
+          class $ACT : $BASE(...), $INTERFACE1, $INTERFACE2 {
+            ...
+            override fun onResume() {
+              ...
+            }
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $ACT
+          regex: .*Activity.*
+      - metavariable-regex:
+          metavariable: $BASE
+          regex: .*(Activity|AppCompatActivity|FragmentActivity|ComponentActivity).*
+
+
+rules:
+  - id: cerber-logout-callback-empty
+    message: >
+      onLogout() callback has an empty implementation. The app must handle
+      logout events from CerberSDK by clearing sensitive data from memory and
+      navigating to a safe screen.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: logout-ignored
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: |
+          override fun onLogout() { }
+      - pattern: |
+          fun onLogout() { }
+      - pattern: |
+          override fun onLogout() = Unit
+
+rules:
+  - id: cerber-no-auth-detected-ignored
+    message: >
+      onNoAuthDetected() callback has an empty implementation. When CerberSDK
+      reports no authorization, the app must handle this event — typically by
+      redirecting to login or restricting access to sensitive screens.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: auth-event-ignored
+      cwe: "CWE-287: Improper Authentication"
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: |
+          override fun onNoAuthDetected() { }
+      - pattern: |
+          fun onNoAuthDetected() { }
+      - pattern: |
+          override fun onNoAuthDetected() = Unit
+
+
+rules:
+  - id: cerber-root-detected-no-termination
+    message: >
+      onRootDetected() has an implementation but does not terminate the app.
+      CerberSDK's DeviceNotSecureActivity can be bypassed via Frida by hooking
+      ContextWrapper.startActivity(). The host app's onRootDetected() callback
+      is the last line of defense — it must call exitProcess(),
+      Process.killProcess(), or at minimum finish() all activities to prevent
+      continued use on rooted device.
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: root-detection-weak-response
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: |
+              override fun onRootDetected() {
+                ...
+              }
+          - pattern: |
+              override fun onRootDetected() { }
+      - pattern-not: |
+          override fun onRootDetected() {
+            ...
+            System.exit(...)
+            ...
+          }
+      - pattern-not: |
+          override fun onRootDetected() {
+            ...
+            exitProcess(...)
+            ...
+          }
+      - pattern-not: |
+          override fun onRootDetected() {
+            ...
+            $PROCESS.killProcess(...)
+            ...
+          }
+      - pattern-not: |
+          override fun onRootDetected() {
+            ...
+            finish()
+            ...
+          }
+      - pattern-not: |
+          override fun onRootDetected() {
+            ...
+            finishAffinity()
+            ...
+          }
+      - pattern-not: |
+          override fun onRootDetected() {
+            ...
+            finishAndRemoveTask()
+            ...
+          }
+
+
+rules:
+  - id: cerber-root-detection-bypass-attempt
+    message: >
+      CerberSDK root detection callback onRootDetected() has an empty
+      implementation. Root detection events must be handled properly (e.g.,
+      terminate the application or restrict functionality).
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: detection-bypass
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: |
+          override fun onRootDetected() { }
+      - pattern: |
+          fun onRootDetected() { }
+      - pattern: |
+          override fun onRootDetected() = Unit
+      - pattern: |
+          override fun onRootDetected() {
+              return
+          }
+      - pattern: |
+          override fun onRootDetected() {
+              Unit
+          }
+
+
+rules:
+  - id: cerber-root-detection-bypass-attempt
+    message: >
+      CerberSDK root detection callback onRootDetected() has an empty
+      implementation. Root detection events must be handled properly (e.g.,
+      terminate the application or restrict functionality).
+    severity: ERROR
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: detection-bypass
+      cwe: "CWE-693: Protection Mechanism Failure"
+      confidence: MEDIUM
+    pattern-either:
+      - pattern: |
+          override fun onRootDetected() { }
+      - pattern: |
+          fun onRootDetected() { }
+      - pattern: |
+          override fun onRootDetected() = Unit
+      - pattern: |
+          override fun onRootDetected() {
+              return
+          }
+      - pattern: |
+          override fun onRootDetected() {
+              Unit
+          }
+
+
+rules:
+  - id: cerber-file-received-callback-empty
+    message: >
+      onFileReceived() callback has an empty implementation. CerberSDK's secure
+      file transfer sends files through CerberTransferActivity and notifies the
+      host app via this callback. An empty implementation means received files
+      are silently dropped.
+    severity: WARNING
+    languages:
+      - kotlin
+    metadata:
+      category: cerber-sdk-security
+      subcategory: file-transfer-ignored
+      confidence: INFO
+    pattern-either:
+      - pattern: |
+          override fun onFileReceived($URI: Uri, $PKG: String) { }
+      - pattern: |
+          fun onFileReceived($URI: Uri, $PKG: String) { }
+      - pattern: |
+          override fun onFileReceived($URI: Uri, $PKG: String) = Unit
+
+
