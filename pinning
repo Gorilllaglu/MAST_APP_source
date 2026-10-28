@@ -1,0 +1,277 @@
+package ru.sberbank.sberapps.utils
+
+import android.content.Context
+import androidx.annotation.RawRes
+import com.google.gson.Gson
+import dagger.hilt.android.qualifiers.ApplicationContext
+import okhttp3.Cache
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import ru.sberbank.cerbersdk.data.interceptor.HeaderInterceptor
+import ru.sberbank.cerbersdk.domain.repository.CerberStore
+import ru.sberbank.cerbersdk.domain.repository.CerberStoreRepository
+import ru.sberbank.cerbersdk.sdk_framework.CerberSDKApplication
+import ru.sberbank.sberapps.BuildConfig
+import ru.sberbank.sberapps.BuildConfig.BASE_URI
+import ru.sberbank.sberapps.data.network.api.ApkDownloadApi
+import ru.sberbank.sberapps.data.network.api.AppsApi
+import ru.sberbank.sberapps.data.network.api.AuthApi
+import ru.sberbank.sberapps.data.network.api.MdmAppApi
+import ru.sberbank.sberapps.data.network.api.OptionalUpdateApi
+import ru.sberbank.sberapps.data.network.api.RatingApi
+import ru.sberbank.sberapps.data.network.api.SignatureApi
+import ru.sberbank.sberapps.data.network.interceptors.AppsMockingInterceptor
+import ru.sberbank.sberapps.data.network.interceptors.DownloadProgressInterceptor
+import ru.sberbank.sberapps.data.network.interceptors.DownloadProgressInterceptor.DownloadProgressListener
+import ru.sberbank.sberapps.data.network.interceptors.NoInternetConnectionInterceptor
+import ru.sberbank.sberapps.di.modules.KeyManagerImpl
+import java.io.InputStream
+import java.security.KeyStore
+import java.security.SecureRandom
+import java.security.cert.Certificate
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+
+class ApiSelector @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val cache: Cache,
+    private val httpLoggingInterceptor: HttpLoggingInterceptor,
+    private val cerberStore: CerberStore,
+    private val gson: Gson
+) {
+    companion object {
+        private const val REQUEST_TIMEOUT = 60L
+    }
+
+    private val delegate = (context as CerberSDKApplication).getDelegate()
+    fun selectOkHttpClient(
+        vararg interceptors: Interceptor,
+        disableLoggingInterceptor: Boolean = false,
+        customHeaderInterceptor: HeaderInterceptor? = null
+    ): OkHttpClient {
+        var client = OkHttpClient.Builder()
+            .addInterceptor(
+                customHeaderInterceptor ?: HeaderInterceptor(
+                    delegate = delegate,
+                    store = cerberStore as CerberStoreRepository,
+                    deviceUtils = delegate.sberappsInteractor.getDeviceUtils(),
+                    deviceFingerprint = delegate.sberappsInteractor.getDeviceFingerprint()
+                )
+            )
+            // Добавляем CerberPinningRetryInterceptor для динамического SSL pinning
+            .addInterceptor(delegate.sberappsInteractor.getPinningInterceptor())
+
+        if (BuildConfig.SHOULD_MOCK_SERVER) {
+            client.addInterceptor(AppsMockingInterceptor())
+        }
+
+        if (!disableLoggingInterceptor) {
+            client.addInterceptor(httpLoggingInterceptor)
+        }
+
+        interceptors.forEach { client.addInterceptor(it) }
+
+        when {
+            delegate.cerberStore.getStoredCA() is CerberStore.CAResult.Success -> {
+                // Используем CerberTrustManager из SDK через sberappsInteractor
+                val trustManager = delegate.sberappsInteractor.getTrustManager()
+
+                var socketFactory: SSLSocketFactory? = null
+
+                val store =
+                    (cerberStore.getStoredCA() as? CerberStore.CAResult.Success)?.keyStore?.getEntry(
+                        CerberStore.Companion.SBERAPPS_KEYSTORE_ALIAS, null
+                    ) as? KeyStore.PrivateKeyEntry
+
+                val pk = store?.privateKey
+                val ca = store?.certificate as? X509Certificate
+                if (pk != null && ca != null) {
+                    val keyChain = listOf(ca)
+                    val sslContext = SSLContext.getInstance("TLSv1.2")
+                    val kfm = KeyManagerImpl("client", keyChain.toTypedArray(), pk)
+                    sslContext?.init(arrayOf(kfm), arrayOf<TrustManager>(trustManager), null)
+                    socketFactory = sslContext.socketFactory
+                }
+                socketFactory?.let { client = client.sslSocketFactory(it, trustManager) }
+            }
+        }
+
+        client = client.connectTimeout(REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .writeTimeout(REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .readTimeout(REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .cache(cache)
+        // CertificatePinner удален - пиннинг выполняется через CerberPinningRetryInterceptor
+
+        return client.build()
+    }
+
+    fun getClickStreamClient(
+        vararg interceptors: Interceptor, disableLoggingInterceptor: Boolean = false
+    ): OkHttpClient {
+        var client = OkHttpClient.Builder()
+            .addInterceptor(
+                HeaderInterceptor(
+                    delegate = delegate,
+                    store = cerberStore as CerberStoreRepository,
+                    deviceUtils = delegate.sberappsInteractor.getDeviceUtils(),
+                    deviceFingerprint = delegate.sberappsInteractor.getDeviceFingerprint()
+                )
+            )
+        // Добавляем CerberPinningRetryInterceptor для динамического SSL pinning
+//            .addInterceptor(delegate.sberappsInteractor.getPinningInterceptor())
+
+        if (!disableLoggingInterceptor) {
+            client.addInterceptor(httpLoggingInterceptor)
+        }
+
+        interceptors.forEach { client.addInterceptor(it) }
+
+        client = client.connectTimeout(REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .writeTimeout(REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .readTimeout(REQUEST_TIMEOUT, TimeUnit.SECONDS)
+            .ignoreAllSSLErrors()
+            .cache(cache)
+
+        return client.build()
+    }
+
+    fun OkHttpClient.Builder.ignoreAllSSLErrors(): OkHttpClient.Builder {
+        val naiveTrustManager = object : X509TrustManager {
+            override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            override fun checkClientTrusted(certs: Array<X509Certificate>, authType: String) = Unit
+            override fun checkServerTrusted(certs: Array<X509Certificate>, authType: String) = Unit
+        }
+
+        val insecureSocketFactory = SSLContext.getInstance("TLSv1.2").apply {
+            val trustAllCerts = arrayOf<TrustManager>(naiveTrustManager)
+            init(null, trustAllCerts, SecureRandom())
+        }.socketFactory
+
+        sslSocketFactory(insecureSocketFactory, naiveTrustManager)
+        hostnameVerifier(HostnameVerifier { _, _ -> true })
+        return this
+    }
+
+    private fun getCertificateFromResource(id: Int): Certificate {
+        val cf = CertificateFactory.getInstance("X.509")
+        return cf.generateCertificate(context.resources.openRawResource(id))
+    }
+
+    private fun OkHttpClient.Builder.recreateSslChain(context: Context): OkHttpClient.Builder {
+        // Используем CerberTrustManager из SDK через sberappsInteractor
+        val trustManager = delegate.sberappsInteractor.getTrustManager()
+
+        val insecureSocketFactory = SSLContext.getInstance("TLSv1.2").apply {
+            val trustAllCerts = arrayOf<TrustManager>(trustManager)
+            init(null, trustAllCerts, SecureRandom())
+        }.socketFactory
+        sslSocketFactory(insecureSocketFactory, trustManager)
+        hostnameVerifier { _Ho, _ -> true }
+        return this
+    }
+
+    private fun createFromRaw(context: Context, @RawRes vararg IDs: Int): KeyStore {
+        val cf: CertificateFactory = CertificateFactory.getInstance("X.509")
+        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+        keyStore.load(null, null)
+        IDs.forEach {
+            val caInput: InputStream = context.resources.openRawResource(it)
+            val X509Ca: X509Certificate = cf.generateCertificate(caInput) as X509Certificate
+            keyStore.setCertificateEntry(it.toString(), X509Ca)
+        }
+        return keyStore
+    }
+
+    private fun getRetrofit(
+        vararg interceptors: Interceptor,
+        disableLoggingInterceptor: Boolean = false,
+        customHeaderInterceptor: HeaderInterceptor? = null
+    ): Retrofit {
+        val newList = interceptors.toMutableList()
+        newList.add(NoInternetConnectionInterceptor(context))
+
+        return Retrofit.Builder().baseUrl(BASE_URI).client(
+            selectOkHttpClient(
+                *newList.toTypedArray(),
+                disableLoggingInterceptor = disableLoggingInterceptor,
+                customHeaderInterceptor = customHeaderInterceptor
+            )
+        ).addConverterFactory(GsonConverterFactory.create(gson)).build()
+    }
+
+    fun getAuthApi(): AuthApi = getRetrofit().create(AuthApi::class.java)
+
+    fun getAppsApi(
+        headers: Map<String, String> = emptyMap(), removeHeaders: Set<String> = emptySet()
+    ): AppsApi = getRetrofit(
+        HeaderInterceptor(
+            headers = headers,
+            removeHeadersSet = removeHeaders,
+            delegate = delegate,
+            store = cerberStore as CerberStoreRepository,
+            deviceUtils = delegate.sberappsInteractor.getDeviceUtils(),
+            deviceFingerprint = delegate.sberappsInteractor.getDeviceFingerprint()
+        )
+    ).create(AppsApi::class.java)
+
+    fun getSignatureApi(
+        headers: Map<String, String> = emptyMap(), removeHeaders: Set<String> = emptySet()
+    ): SignatureApi = getRetrofit(
+        HeaderInterceptor(
+            headers = headers,
+            removeHeadersSet = removeHeaders,
+            delegate = delegate,
+            store = cerberStore as CerberStoreRepository,
+            deviceUtils = delegate.sberappsInteractor.getDeviceUtils(),
+            deviceFingerprint = delegate.sberappsInteractor.getDeviceFingerprint()
+        )
+    ).create(SignatureApi::class.java)
+
+    fun getRatingApi(
+        headers: Map<String, String> = emptyMap(), removeHeaders: Set<String> = emptySet()
+    ): RatingApi = getRetrofit(
+        HeaderInterceptor(
+            headers = headers,
+            removeHeadersSet = removeHeaders,
+            delegate = delegate,
+            store = cerberStore as CerberStoreRepository,
+            deviceUtils = delegate.sberappsInteractor.getDeviceUtils(),
+            deviceFingerprint = delegate.sberappsInteractor.getDeviceFingerprint()
+        )
+    ).create(RatingApi::class.java)
+
+    fun getMdmAppApi(
+        headers: Map<String, String> = emptyMap(), removeHeaders: Set<String> = emptySet()
+    ): MdmAppApi = getRetrofit(
+        HeaderInterceptor(
+            headers = headers,
+            removeHeadersSet = removeHeaders,
+            delegate = delegate,
+            store = cerberStore as CerberStoreRepository,
+            deviceUtils = delegate.sberappsInteractor.getDeviceUtils(),
+            deviceFingerprint = delegate.sberappsInteractor.getDeviceFingerprint()
+        )
+    ).create(MdmAppApi::class.java)
+
+    fun getDownloadApkApi(downloadProgressListener: DownloadProgressListener) = getRetrofit(
+        interceptors = arrayOf(DownloadProgressInterceptor(downloadProgressListener)),
+        disableLoggingInterceptor = true
+    ).create(ApkDownloadApi::class.java)
+
+    fun getOptionalUpdateApi(downloadProgressListener: DownloadProgressListener): OptionalUpdateApi =
+        getRetrofit(DownloadProgressInterceptor(downloadProgressListener)).create(OptionalUpdateApi::class.java)
+
+    fun getOptionalUpdateApi(): OptionalUpdateApi =
+        getRetrofit().create(OptionalUpdateApi::class.java)
+
+}
