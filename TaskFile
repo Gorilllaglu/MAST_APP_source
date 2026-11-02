@@ -1,0 +1,137 @@
+{
+  "path": "/resources/res/AndroidManifest.xml",
+  "content": "<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="1" android:versionName="1.0.0" android:compileSdkVersion="34" android:compileSdkVersionCodename="14" package="ru.company.filemanager" platformBuildVersionCode="34" platformBuildVersionName="14">
+  <uses-sdk android:minSdkVersion="34" android:targetSdkVersion="34"/>
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+  <uses-permission android:name="android.permission.WAKE_LOCK"/>
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <permission android:name="ru.company.filemanager.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" android:protectionLevel="0x00000002"/>
+  <uses-permission android:name="ru.company.filemanager.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"/>
+  <application android:theme="@7F110227" android:label="@7F100022" android:icon="@7F0E0000" android:name="ru.company.filemanager.FileManagerApp" android:allowBackup="false" android:supportsRtl="true" android:extractNativeLibs="false" android:fullBackupContent="@7F130000" android:roundIcon="@7F0E0002" android:appComponentFactory="androidx.core.app.CoreComponentFactory" android:dataExtractionRules="@7F130001">
+    <activity android:label="@7F100022" android:name="ru.company.filemanager.ui.MainActivity" android:exported="true" android:configChanges="0x00000D80" android:filterTouchesWhenObscured="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+    <provider android:name="androidx.core.content.FileProvider" android:exported="false" android:authorities="ru.company.filemanager.provider" android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@7F130002"/>
+    </provider>
+    <provider android:name="androidx.startup.InitializationProvider" android:exported="false" android:authorities="ru.company.filemanager.androidx-startup">
+      <meta-data android:name="androidx.emoji2.text.EmojiCompatInitializer" android:value="androidx.startup"/>
+      <meta-data android:name="androidx.work.WorkManagerInitializer" android:value="androidx.startup"/>
+      <meta-data android:name="androidx.lifecycle.ProcessLifecycleInitializer" android:value="androidx.startup"/>
+      <meta-data android:name="androidx.profileinstaller.ProfileInstallerInitializer" android:value="androidx.startup"/>
+    </provider>
+    <service android:name="androidx.work.impl.background.systemalarm.SystemAlarmService" android:enabled="@7F040002" android:exported="false" android:directBootAware="false"/>
+    <service android:name="androidx.work.impl.background.systemjob.SystemJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:enabled="@7F040004" android:exported="true" android:directBootAware="false"/>
+    <service android:name="androidx.work.impl.foreground.SystemForegroundService" android:enabled="@7F040003" android:exported="false" android:directBootAware="false"/>
+    <receiver android:name="androidx.work.impl.utils.ForceStopRunnable$BroadcastReceiver" android:enabled="true" android:exported="false" android:directBootAware="false"/>
+    <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy" android:enabled="false" android:exported="false" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="android.intent.action.ACTION_POWER_CONNECTED"/>
+        <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED"/>
+      </intent-filter>
+    </receiver>
+    <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy" android:enabled="false" android:exported="false" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BATTERY_OKAY"/>
+        <action android:name="android.intent.action.BATTERY_LOW"/>
+      </intent-filter>
+    </receiver>
+    <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy" android:enabled="false" android:exported="false" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="android.intent.action.DEVICE_STORAGE_LOW"/>
+        <action android:name="android.intent.action.DEVICE_STORAGE_OK"/>
+      </intent-filter>
+    </receiver>
+    <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy" android:enabled="false" android:exported="false" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="android.net.conn.CONNECTIVITY_CHANGE"/>
+      </intent-filter>
+    </receiver>
+    <receiver android:name="androidx.work.impl.background.systemalarm.RescheduleReceiver" android:enabled="false" android:exported="false" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+        <action android:name="android.intent.action.TIME_SET"/>
+        <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
+      </intent-filter>
+    </receiver>
+    <receiver android:name="androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver" android:enabled="@7F040002" android:exported="false" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="androidx.work.impl.background.systemalarm.UpdateProxies"/>
+      </intent-filter>
+    </receiver>
+    <receiver android:name="androidx.work.impl.diagnostics.DiagnosticsReceiver" android:permission="android.permission.DUMP" android:enabled="true" android:exported="true" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="androidx.work.diagnostics.REQUEST_DIAGNOSTICS"/>
+      </intent-filter>
+    </receiver>
+    <service android:name="androidx.room.MultiInstanceInvalidationService" android:exported="false" android:directBootAware="true"/>
+    <receiver android:name="androidx.profileinstaller.ProfileInstallReceiver" android:permission="android.permission.DUMP" android:enabled="true" android:exported="true" android:directBootAware="false">
+      <intent-filter>
+        <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="androidx.profileinstaller.action.SKIP_FILE"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="androidx.profileinstaller.action.SAVE_PROFILE"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION"/>
+      </intent-filter>
+    </receiver>
+  </application>
+</manifest>
+"
+}
+
+
+1. Требование ВНД 23.1.1. Защита от отладки. При выявлении отладочных процедур приложение должно прекратить работу.
+2. Требование ВНД 23.1.2. Защита от внесения изменений. Контроль целостности исполняемого модуля и ресурсов (Android SafetyNet Attestation / Play Integrity). При выявлении изменений — прекратить работу.
+3. Требование ВНД 23.1.3. Защита от инженерного анализа. Обфускация имён классов/методов, строковых констант, критичных участков кода.
+4. Требование ВНД 23.1.4. Отключение скриншота. Запрет скриншотов экрана (FLAG_SECURE). Если платформа не позволяет — информировать пользователя о последствиях.
+5. Требование ВНД 23.1.5. Работа на jailbreak/root-устройствах. Приложение не должно работать на устройствах с root/jailbreak. Контроль целостности платформы (SafetyNet/Play Integrity).
+6. Требование ВНД 23.1.7. Режим разработчика. Не запускаться на устройствах с включённым режимом разработчика.
+7. Требование ВНД 23.1.14. Буфер обмена. «Вырезать/копировать/вставить» не должны давать доступ к содержимому другим приложениям; передача только внутри приложения.
+8. Требование ВНД 23.1.15. Tapjacking. Запрет взаимодействия, если интерфейс перекрыт другим приложением; filterTouchesWhenObscured="true".
+9. Требование ВНД 23.1.23. Режим отладки. Сборка для опытной/промышленной эксплуатации без режима отладки.
+10. Требование ВНД 23.1.24. Автономный режим. Допускается работа в автономном режиме при отсутствии серверной части.
+11. Требование ВНД 23.1.31. Криптографические операции. Только через API ОС; сторонние крипто-библиотеки — только после ПСИ с Департаментом безопасности.
+12. Требование ВНД 23.1.32. Чувствительная информация в журналах. Запрет записи банковской тайны, ПДн, ключей в журналы аудита/технологические журналы.
+13. Требование ВНД 23.1.34. Удаление из памяти при закрытии. При завершении работы — обнуление чувствительной информации из ОЗУ (взамен сборщика мусора).
+14. Требование ВНД 23.1.35. Ограничение доступа к ресурсам. Не предоставлять доступ к программным ресурсам приложения другим приложениям.
+15. Требование ВНД 23.1.36. Удаление приложения. При удалении приложения — удалять всю связанную информацию, включая ключевую из защищённого хранилища.
+16. Требование ВНД 23.1.38. Фоновый режим. Отключить фоновую работу или использовать размытие/безопасный экран при переходе в фон (на поддерживающих скриншоты в хранилище платформах).
+17. Требование ВНД 23.1.40. Broadcast-сообщения. Запрет приёма broadcast-сообщений от сторонних приложений.
+18. Файлы чувствительной категории шифруются при хранении (AES-GCM); ключ в Android Keystore (StrongBox при наличии), не в коде. Незашифрованное хранение в SharedPreferences/обычной БД запрещено.
+19. На экранах, отображающих содержимое файлов, установлен FLAG_SECURE (запрет скриншотов и утечки в превью «Недавние»).
+20. Файлы не предоставляются другим приложениям через ContentProvider; доступ только внутри приложения.
+21. Содержимое файлов не копируется в буфер обмена.
+22. Передача файлов — только явными (explicit) интентами из доверенного списка целевых приложений; broadcast-рассылки с содержимым запрещены.
+23. Приложение запрашивает только минимально необходимые разрешения (например Storage) — каждое с обоснованием; опасные/ограниченные разрешения «про запас» запрещены. По возможности использоваться Storage Access Framework (SAF) / scoped storage вместо глобального разрешения.
+24. Все компоненты (activity/service/receiver/provider) объявлены с android:exported="false", кроме обязательных для системы; исключения — с ограничением доступа уровня signature.
+25. Резервное копирование отключено: android:allowBackup="false" + явные dataExtractionRules/fullBackupContent.
+26. В релизной сборке нет подробного логирования; в логи не попадают пользовательские данные, идентификаторы и чувствительные значения.
+27. В коде и ресурсах (res/, strings.xml, BuildConfig) нет захардкоженных секретов/ключей/токенов.
+28. Данные хранятся только во внутреннем хранилище; внешнее хранилище для приватных данных не используется.
+29. Криптография: AES-GCM, SecureRandom; запрещены MD5/SHA-1/DES/3DES/ECB/статичный IV.
+30. Приложение не загружает и не исполняет код динамически (нет загрузки сторонних DEX/нативных библиотек в рантайме).
+31. Зависимости проходят SCA на уязвимости; минимальный набор библиотек из доверенных источников.
+32.  Приложение не ослабляет защиту устройства и не обходит/не изменяет политики MDM (запрет доступа к системным настройкам, которые ослабляют безопасность).
+33. Запрещён доступ к каталогам и файлам, находящимся вне доверенной области, если это не разрешено политикой MDM.
+34. Единственная функция приложения — удаление содержимого заданных папок по кнопке. Нет просмотра, открытия, создания, изменения и передачи файлов.
+35. Папки заданы в коде. Список не принимается из extras, broadcast, файлов общего хранилища и других внешних источников.
+36. Удаляется содержимое папок, сами корневые папки сохраняются.
+37. Код не читает содержимое и не пишет в общее хранилище: нет openInputStream, openFileDescriptor, FileInputStream, FileOutputStream и аналогов. Только перечисление и удаление.
+38. Перед очисткой — модальное подтверждение. filterTouchesWhenObscured="true" на кнопке и в диалоге.
+39. Обход итеративный, вне main thread, с лимитами глубины и количества. Ошибка на отдельном файле не прерывает очистку. Итог на экране: удалено N, не удалено M.
+40. Единственное разрешение на хранилище — MANAGE_EXTERNAL_STORAGE. При этом обязательно выполнение требования - все компоненты (activity/service/receiver/provider) объявлены с android:exported="false" (для предотвращения возникновения реализации сценариев эксплуатации широких возможностей выданного гранта).
+41. Гранд выдаётся только политикой MDM пользователю. В киоске экран Настроек не открывается; при isExternalStorageManager() == false — ошибка «обратитесь к администратору» (не поднимать окно-запрос на выдачу доступа внутри приложения).
+42. Пути строятся через Environment.getExternalStoragePublicDirectory() (DIRECTORY_PICTURES, DIRECTORY_DCIM, DIRECTORY_DOWNLOADS) и канонизируются. Только основной том; SD-карта и USB-OTG не затрагиваются.
+43. Перед удалением каждого объекта канонический путь проверяется на вхождение в одну из трёх папок (startsWith(root + "/")). Обход без следования по symlink (Files.walkFileTree без FOLLOW_LINKS) и без пересечения точек монтирования.
+44. Внутри трех папок удаляются все файлы, включая скрытые (.nomedia, dot-папки, .thumbnails) и файлы корзины (.trashed-*).
