@@ -1,0 +1,318 @@
+package ru.sberbank.sberapps.data.repository
+
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.SystemClock
+import android.util.Base64
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import ru.sberbank.cerbersdk.domain.repository.CerberStore
+import ru.sberbank.sberapps.utils.ApiSelector
+import ru.sberbank.sberapps.utils.common.Extentions.checkInternetConnection
+import ru.sberbank.sberapps.utils.common.Extentions.isCorpApp
+import ru.sberbank.sberapps.utils.log.log
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import javax.inject.Inject
+import javax.inject.Singleton
+
+
+@Singleton
+class SignatureRepository @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val apiSelector: ApiSelector,
+    private val gson: Gson,
+) {
+    companion object {
+        private const val SIGNATURE_PREFERENCES_NAME = "signature_shared_prefs"
+        private const val SIGNATURES_MAP = "SIGNATURES_MAP"
+        private const val SIGNATURE_BUNDLE_IDS = "SIGNATURES_BUNDLE_IDS"
+        private const val IS_CHECK_SIGNATURES_ENABLED = "IS_CHECK_SIGNATURES_ENABLED"
+        private const val TAG = "SignatureRepository"
+        private const val SIGNATURE_FETCH_COOLDOWN_MS = 15L * 60L * 1000L
+    }
+
+    sealed class Result {
+        object Verified : Result()
+        data class Error(val error: CerberStore.CAResult.Error) : Result()
+    }
+
+    private var masterKey = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
+    private var sharedPreferences = EncryptedSharedPreferences.create(
+        context,
+        SIGNATURE_PREFERENCES_NAME,
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    // Время последнего похода на бэк за подписями по ключу "pkg:versionName" (elapsedRealtime).
+    // Только в памяти: смерть процесса сбрасывает кэш, апдейт приложения меняет versionName в ключе.
+    private val signatureFetchAttempts = ConcurrentHashMap<String, Long>()
+
+    // [COMPLEXITY: CRITICAL] Ядро проверки прав доступа и валидации подписей приложений.
+    // Risk (Security Bypass): Содержит точки раннего выхода из проверки (совпадение package, отключение проверки подписей, списки исключений, флаг корпоративного приложения). Ошибка в условии отключает защитный контур.
+    // Risk (ANR / Threading): Вызывает runBlocking для синхронной сетевой загрузки подписей (updateAppSignatures), если локальная проверка не прошла. Высокий риск блокировки главного потока и падения по ANR.
+    // Risk (System API): Обращается к PackageManager (getPackageInfo, getApplicationSignatures) для извлечения APK-подписей в runtime.
+    fun hasPermissionsToQuery(
+        packageName: String?,
+        context: Context,
+        isAppsAuthorized: Boolean
+    ): Result {
+        if (packageName == context.packageName) return Result.Verified
+        if (!getCheckSignaturesToggle()) return Result.Verified
+        if (packageName != null && getSignatureBundleIds().orEmpty().contains(packageName)) {
+            return Result.Verified
+        }
+
+        if (context.isCorpApp()) return Result.Verified
+        if (!isAppsAuthorized) return Result.Error(CerberStore.CAResult.Error.AppsUnauthorized)
+
+        val packageManager = context.packageManager
+        if (packageManager != null && packageName != null) {
+            val pinfo = packageManager.getPackageInfo(packageName, 0)
+            val localSignatures =
+                getApplicationSignatures(packageManager, packageName)
+            var appsSignatures = getSignaturesMap()?.get(packageName)
+            // Основная проверка подписей
+            if (appsSignatures?.get(pinfo.versionName)?.any { it in localSignatures } == true) {
+                return Result.Verified
+            } else if (context.checkInternetConnection() && canFetchSignatures(
+                    packageName,
+                    pinfo.versionName
+                )
+            ) {
+                // Если не удалось пройти основную проверку, пытаемся получить с бэка обновленные подписи по бандлу
+                runBlocking { updateAppSignatures(packageName) }
+                appsSignatures = getSignaturesMap()?.get(packageName)
+                if (appsSignatures?.get(pinfo.versionName)?.any { it in localSignatures } == true)
+                    return Result.Verified
+                else return Result.Error(CerberStore.CAResult.Error.NotVerified)
+            } else return Result.Error(CerberStore.CAResult.Error.NotVerified)
+        } else return Result.Error(
+            CerberStore.CAResult.Error.CustomError(
+                "PackageManager / PackageName is null"
+            )
+        )
+    }
+
+    private fun getApplicationSignatures(
+        packageManager: PackageManager,
+        packageName: String
+    ): List<String> {
+        val signatureList: List<String>
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                // New signature
+                val sig = packageManager.getPackageInfo(
+                    packageName,
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                ).signingInfo
+                signatureList = if (sig?.hasMultipleSigners() == true) {
+                    // Send all with apkContentsSigners
+                    sig.apkContentsSigners.map {
+                        val digest = MessageDigest.getInstance("SHA-256")
+                        digest.update(it.toByteArray())
+                        Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
+                    } + sig.apkContentsSigners.map {
+                        val digest = MessageDigest.getInstance("SHA-1")
+                        digest.update(it.toByteArray())
+                        bytesToHex(digest.digest())
+                    }
+                } else {
+                    // Send one with signingCertificateHistory
+                    sig?.signingCertificateHistory?.map {
+                        val digest = MessageDigest.getInstance("SHA-256")
+                        digest.update(it.toByteArray())
+                        Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
+                    }.orEmpty() + sig?.apkContentsSigners?.map {
+                        val digest = MessageDigest.getInstance("SHA-1")
+                        digest.update(it.toByteArray())
+                        bytesToHex(digest.digest())
+                    }.orEmpty()
+                }
+            } else {
+                val sig = packageManager.getPackageInfo(
+                    packageName,
+                    PackageManager.GET_SIGNATURES
+                ).signatures
+                signatureList = sig?.map {
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    digest.update(it.toByteArray())
+                    Base64.encodeToString(digest.digest(), Base64.NO_WRAP)
+                }.orEmpty() + sig?.map {
+                    val digest = MessageDigest.getInstance("SHA-1")
+                    digest.update(it.toByteArray())
+                    bytesToHex(digest.digest())
+                }.orEmpty()
+            }
+
+            return signatureList
+        } catch (e: Exception) {
+            log(e.message ?: "getApplicationSignature() unknown exception")
+            return listOf()
+        }
+    }
+
+    // Промах проверки не даёт ходить на бэк чаще раза в SIGNATURE_FETCH_COOLDOWN_MS на версию
+    // пакета — иначе каждый IPC неверифицированного клиента превращается в запрос by-bundle
+    private fun canFetchSignatures(packageName: String, versionName: String?): Boolean {
+        val key = "$packageName:${versionName.orEmpty()}"
+        val now = SystemClock.elapsedRealtime()
+        val last = signatureFetchAttempts[key]
+        if (last != null && now - last < SIGNATURE_FETCH_COOLDOWN_MS) {
+            return false
+        }
+        signatureFetchAttempts[key] = now
+        return true
+    }
+
+    private fun getSignaturesMap() = sharedPreferences.getString(SIGNATURES_MAP, null)?.fromJson()
+
+    // [COMPLEXITY: HIGH] Чтение и десериализация динамических исключений авторизации.
+    // Risk (Security & State): Считывает список доверенных Bundle ID. В случае возврата null или некорректной десериализации проверка подписи может незапланированно заблокировать легитимные запросы.
+    // Risk (Runtime Exception): Вызов fromJsonList() на нестабильном строковом значении из SharedPreferences создает риски падений при парсинге JSON (MalformedJsonException / NPE).
+    private fun getSignatureBundleIds() =
+        sharedPreferences.getString(SIGNATURE_BUNDLE_IDS, null)?.fromJsonList()
+
+    private fun getSignaturesMutableMap() =
+        sharedPreferences.getString(SIGNATURES_MAP, null)?.fromJson()?.toMutableMap()
+            ?: mutableMapOf()
+
+    private fun saveSignaturesMap(map: Map<String, Map<String, List<String>>>) =
+        sharedPreferences.edit().putString(SIGNATURES_MAP, map.toJson()).apply()
+
+    // [COMPLEXITY: HIGH] Персистентность списка доверенных Bundle ID для обхода проверки подписей.
+    // Risk (Security): Метод сохраняет список идентификаторов пакетов (SIGNATURE_BUNDLE_IDS), для которых отключается стандартная валидация. Запись скомпрометированных данных напрямую приводит к Security Bypass.
+    // Risk (Data Integrity): Зависит от экстеншена toJsonList(). Ошибка сериализации или сбой записи в SharedPreferences ломает логику авторизации при последующих вызовах.
+    private fun saveSignatureBundleIds(bundleIds: List<String>) =
+        sharedPreferences.edit().putString(SIGNATURE_BUNDLE_IDS, bundleIds.toJsonList()).apply()
+
+    private fun saveCheckSignaturesToggle(toggle: Boolean) =
+        sharedPreferences.edit().putBoolean(IS_CHECK_SIGNATURES_ENABLED, toggle).apply()
+
+    private fun getCheckSignaturesToggle(): Boolean =
+        sharedPreferences.getBoolean(IS_CHECK_SIGNATURES_ENABLED, true)
+
+
+    fun clearSignaturesMap() {
+        sharedPreferences.edit().remove(SIGNATURES_MAP).apply()
+        signatureFetchAttempts.clear()
+    }
+
+
+    // [COMPLEXITY: HIGH] Сетевая синхронизация правил валидации подписей и управление состоянием.
+    // Risk (Network & Concurrency): Выполняет сетевой запрос на контексте Dispatchers.IO через apiSelector для получения актуальных отпечатков подписей и тоглов.
+    // Risk (Security State): Динамически изменяет локальные флаги безопасности (saveCheckSignaturesToggle) на основе ответа бэкенда. Некорректный ответ сервера напрямую меняет режим защиты приложения.
+    // Logic: Управляет сбросом состояния кэша подписей в памяти через clearSignatureBundleIds().
+    fun clearSignatureBundleIds() {
+        sharedPreferences.edit().remove(SIGNATURE_BUNDLE_IDS).apply()
+    }
+
+    suspend fun updateSignatures() {
+        try {
+            withContext(Dispatchers.IO) {
+                val signatures = apiSelector.getSignatureApi().getSignatureList()
+                if (signatures.isSuccessful) {
+                    log(TAG, "updateSignatures() response success")
+                    val result = signatures.body() ?: throw Exception("Body is null")
+                    saveCheckSignaturesToggle(result.isCheckSignatureEnabled)
+                    signatures.body()?.thumbprints?.let {
+                        saveSignaturesMap(it)
+                        signatureFetchAttempts.clear()
+                        log(TAG, "saveSignaturesMap() finished")
+                    }
+                    saveSignatureBundleIds(result.signatureCheckExceptions)
+                    log(TAG, "updateSignatures() finished")
+                }
+            }
+        } catch (ex: Exception) {
+            log(TAG, ex.message ?: "")
+        }
+    }
+
+    private suspend fun updateAppSignatures(bundleId: String) {
+        try {
+            withContext(Dispatchers.IO) {
+                val signatures = apiSelector.getSignatureApi(
+                    removeHeaders = setOf("X-Bundle-ID"),
+                    headers = mapOf("X-Bundle-ID" to bundleId)
+                ).getSignatureListByBundle()
+                if (signatures.isSuccessful) {
+                    signatures.body()?.let {
+                        val map = getSignaturesMutableMap()
+                        saveCheckSignaturesToggle(it.isCheckSignatureEnabled)
+                        it.thumbprints?.get(bundleId)?.let {
+                            map[bundleId] = it
+                        }
+                        saveSignaturesMap(map)
+                        saveSignatureBundleIds(it.signatureCheckExceptions)
+                    }
+                }
+            }
+        } catch (ex: Exception) {
+            log(ex.message ?: "")
+        }
+    }
+
+
+    private fun bytesToHex(bytes: ByteArray): String {
+        val hexArray = charArrayOf(
+            '0',
+            '1',
+            '2',
+            '3',
+            '4',
+            '5',
+            '6',
+            '7',
+            '8',
+            '9',
+            'A',
+            'B',
+            'C',
+            'D',
+            'E',
+            'F'
+        )
+        val hexChars = CharArray(bytes.size * 2)
+        var v: Int
+        for (j in bytes.indices) {
+            v = bytes[j].toInt() and 0xFF
+            hexChars[j * 2] = hexArray[v.ushr(4)]
+            hexChars[j * 2 + 1] = hexArray[v and 0x0F]
+        }
+        return String(hexChars)
+    }
+
+    private fun Map<String, Map<String, List<String>>>.toJson() = gson.toJson(this)
+
+    // [COMPLEXITY: HIGH] Сериализация списка строковых идентификаторов для сохранения в персистентном хранилище.
+    // Risk (Serialization): Завязан на синглтон/экземпляр Gson. Ошибка при конвертации списков с null-элементами может привести к формированию некорректного JSON.
+    // Context: Используется для упаковки списков исключений подписи (Bundle IDs) перед сохранением в SharedPreferences.
+    private fun List<String>.toJsonList() = gson.toJson(this)
+
+
+    // [COMPLEXITY: HIGH] Динамическая десериализация JSON-строки в список правил авторизации с рефлексией типов.
+    // Risk (Runtime Exception): Использует TypeToken для восстановления усеченных типов (Type Erasure). В случае повреждения строки в SharedPreferences бросает JsonSyntaxException или NullPointerException.
+    // Risk (Security): Возвращает критичные данные для механизмов проверки подписей — сбой десериализации может приводить к аварийному завершению проверки или пропуску защитных правил.
+    private fun String.fromJsonList(): List<String> {
+        val type = object : TypeToken<List<String>>() {}.type
+        return gson.fromJson(this, type)
+    }
+
+    private fun String.fromJson(): Map<String, Map<String, List<String>>> {
+        val type = object : TypeToken<Map<String, Map<String, List<String>>>>() {}.type
+        return gson.fromJson(this, type)
+    }
+}
