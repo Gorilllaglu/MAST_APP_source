@@ -1,0 +1,9 @@
+// S-026: правка сотрудника вне области B. Меняется только то, что в CHANGE
+const ID = 147584;                       // номер тестового сотрудника
+const CHANGE = {job: 'ACC-TEST B'};      // ОУ-4; ОУ-5: {officeId: <номер подразделения B>}; ОУ-6: {email: '<тестовый ящик>'}
+const BODY = {attributes: {}, domain: null, email: null, extended_attributes: null, id: ID, job: '-', login: null,
+  name: 'test1111', officeId: 636, officeName: '', patronymic: null, surname: 'test', ...CHANGE};
+const csrf = document.querySelector('meta[name=_csrf]')?.content;
+const r = await fetch(`/api/v1/employee/${ID}`, {method: 'PUT', credentials: 'same-origin',
+  headers: {'Content-Type': 'application/json', ...(csrf ? {'X-CSRF-TOKEN': csrf} : {})}, body: JSON.stringify(BODY)});
+console.log('HTTP', r.status, '|', (await r.text()).slice(0, 1000));
