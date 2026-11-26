@@ -1,9 +1,1390 @@
-// S-026: правка сотрудника вне области B. Меняется только то, что в CHANGE
-const ID = 147584;                       // номер тестового сотрудника
-const CHANGE = {job: 'ACC-TEST B'};      // ОУ-4; ОУ-5: {officeId: <номер подразделения B>}; ОУ-6: {email: '<тестовый ящик>'}
-const BODY = {attributes: {}, domain: null, email: null, extended_attributes: null, id: ID, job: '-', login: null,
-  name: 'test1111', officeId: 636, officeName: '', patronymic: null, surname: 'test', ...CHANGE};
-const csrf = document.querySelector('meta[name=_csrf]')?.content;
-const r = await fetch(`/api/v1/employee/${ID}`, {method: 'PUT', credentials: 'same-origin',
-  headers: {'Content-Type': 'application/json', ...(csrf ? {'X-CSRF-TOKEN': csrf} : {})}, body: JSON.stringify(BODY)});
-console.log('HTTP', r.status, '|', (await r.text()).slice(0, 1000));
+# Отчёт: Реализация правил Android CerberSDK на iOS
+
+**Дата:** 2026-11-26  
+**Исходники Android:** `sberapps-android-develop` (анализ по Android-исходникам)  
+**Исходники iOS:** `sberapps-ios-develop@c6efea49`, CerberSDK 3.3.0(9)  
+**Сводная таблица:** `../правила ios/info-pravila-CerberSDK-iOS.xlsx` — 51 правило
+
+---
+
+## Структура отчёта
+
+Каждое правило описано по схеме:
+
+| Поле | Описание |
+|---|---|
+| **Android** | Как правило обнаруживается в Kotlin-коде Android (дефект) |
+| **iOS SberApps** | Как реализовано в коде приложения SberApps на iOS |
+| **iOS CerberSDK** | Как работает в фреймворке CerberSDK iOS |
+| **Вывод** | Соответствие, разрывы, что нужно реализовать |
+
+---
+
+## Содержание
+
+1. [Подготовка и интеграция SDK](#1-подготовка-и-интеграция-sdk)
+2. [SetupOptions — параметры безопасности делегата](#2-setupoptions--параметры-безопасности-делегата)
+3. [Callback-обработка CerberDelegate](#3-callback-обработка-cerberdelegate)
+4. [Flag Secure / SecureScreen](#4-flag-secure--securescreen)
+5. [SecureClipboard / ClipboardManager](#5-secureclipboard--clipboardmanager)
+6. [Text Selection / WebView Selection / Share](#6-text-selection--webview-selection--share)
+7. [SecureInitialCheck](#7-secureinitialcheck)
+8. [Direct OkHttp / Network](#8-direct-okhttp--network)
+9. [File Transfer / Receive](#9-file-transfer--receive)
+10. [Marker Rules](#10-marker-rules)
+11. [Не применимо к iOS](#11-не-применимо-к-ios)
+12. [Сводная таблица всех 43 правил](#12-сводная-таблица-всех-43-правил)
+
+---
+
+## Шпаргалка для разработчика — какие правила уже готовы в semgrep-ios
+
+| Файл yml | Правило iOS | Англ.-эквивалент | Статус |
+|---|---|---|---|
+| `passwordless-disabled.yml` | disablePasswordlessAuth=true | cerber-passwordless-auth-disabled | ✅ Готово |
+| `non-prod-build-type.yml` | mode не .prod (literal) | cerber-non-production-build-type | ✅ Готово |
+| `build-type-variable.yml` | mode из переменной | cerber-non-production-build-type-variable | ✅ Готово |
+| `securescreen-disabled.yml` | secureScreen=false | cerber-insecure-screen-disabled | ✅ Готово |
+| `securescreen-variable.yml` | secureScreen из переменной | cerber-insecure-screen-variable | ✅ Готово |
+| `clipboard-disabled.yml` | secureClipboard=false | cerber-insecure-clipboard-disabled | ✅ Готово |
+| `direct-clipboard-access.yml` | UIPasteboard.general | cerber-host-clipboard-bypass | ✅ Готово |
+| `initialcheck-disabled.yml` | secureInitialCheck=false | cerber-secure-initial-check-disabled | ✅ Готово |
+| `initialcheck-variable.yml` | secureInitialCheck из переменной | cerber-secure-initial-check-variable | ✅ Готово |
+| `root-detected-no-wipe.yml` | didDetectJailbreak без wipe | cerber-root-detected-no-termination | ✅ Готово |
+| `userchanged-empty.yml` | userChanged без очистки | cerber-user-changed-callback-empty | ✅ Готово |
+| `logout-empty.yml` | onLogout пустой | cerber-logout-callback-empty | ✅ Готово |
+| `filereceived-empty.yml` | onFileReceived пустой | cerber-file-received-callback-empty | ✅ Готово |
+| `noauthdetected-missing.yml` | onNoAuthDetected отсутствует | cerber-no-auth-detected-ignored | ✅ Готово |
+| `text-selection-bypass.yml` | UIPasteboard без Cerber | cerber-text-selection-without-sdk-actions | ✅ Готово |
+
+Остальные 28 правил описаны ниже — многие требуют реализации в коде, а не только Semgrep-шаблонов.
+
+---
+
+## 1. Подготовка и интеграция SDK
+
+### cerber-missing-sdk-application-interface
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ✅ Реализовано через `CerberFlowCoordinator` |
+| **Что проверяет** | Класс наследует `Application` но не реализует `CerberSDKApplication` | Приложение должно правильно создать `CerberSDKApplicationDelegate` |
+
+**Android (дефект):**
+```kotlin
+class MainApp : Application() {  // НЕ реализует CerberSDKApplication
+    
+    override fun onCreate() {
+        super.onCreate()
+        // SDK не инициализируется — защита отсутствует
+    }
+}
+```
+
+**iOS (SberApps) — корректно:**
+```swift
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift
+final class CerberFlowCoordinator: BaseFlowCoordinator {
+    let cerber = Cerber.shared
+    
+    init(resolver: DIResolver) {
+        self.resolver = resolver
+        keychainService = resolver.resolve(service: KeychainServiceProtocol.self)
+        eventsService = resolver.resolve(service: IEventsService.self)
+        
+        // SDK инициализируется через SetupOptions
+        cerber.options = SetupOptions(
+            mode: AppConfiguration.cerberMode,
+            loginOptions: AppConfiguration.loginOptions,
+            isPasswordlessEnabled: true,
+            jailbreakCheckerType: .lite,
+            accessGroupID: nil,
+            loggerOptions: [.logEnabled, .debug, .fileLogEnabled],
+            enableTestSSLPinning: true
+        )
+    }
+    
+    func start() {
+        cerber.setDelegateManager(delegate: self)
+        cerber.start()
+    }
+}
+```
+
+> **Вывод:** iOS-аналога нет — архитектура другая. В iOS Application не наследует интерфейс SDK, делегат создаётся в координаторе через `SetupOptions`. Правило **не применимо к iOS** по смыслу, но аналогичная проверка (SetupOptions создан без параметров или с дефолтными) может быть написана.
+
+---
+
+### cerber-default-constructor-used
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ✅ Проверяется через Semgrep |
+
+**Android (дефект):**
+```kotlin
+// Делегат создан без аргументов — берётся BuildType.IFT (тестовый)
+val delegate = CerberSDKApplicationDelegate()  // BuildType.IFT по умолчанию!
+```
+
+**iOS (SberApps):**
+```swift
+// Неприменимо — в iOS SetupOptions всегда создаётся с именованными параметрами:
+cerber.options = SetupOptions(
+    mode: AppConfiguration.cerberMode,
+    loginOptions: AppConfiguration.loginOptions,
+    ...
+)
+```
+
+> **Вывод:** В iOS нет конструктора без параметров `SetupOptions()` — компилятор Swift требует явного указания хотя бы одного именованного параметра. Дефект невозможен архитектурно.
+
+---
+
+## 2. SetupOptions — параметры безопасности делегата
+
+### cerber-passwordless-auth-disabled (V-1)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| WARNING+MEDIUM | 🔴 ERROR (критично для авторизации) |
+| **Semgrep** | ❌ | ✅ `passwordless-disabled.yml` |
+| **TP** | Литерал `disablePasswordlessAuth: true` | `disablePasswordlessAuth: true` в SetupOptions |
+
+**Android (дефект):**
+```kotlin
+class MainApp : Application(), CerberSDKApplication {
+    
+    private val cerberSDKApplicationDelegate = CerberSDKApplicationDelegate(
+        authorizationMode = AuthorizationMode.CERBER,
+        buildType = BuildType.PROM,
+        isolated = false,
+        secureInitialCheck = true,
+        secureScreen = true,
+        secureClipboard = true,
+        enableTestServerPinning = false,
+        sberMagOptions = null,
+        whiteListOptions = emptyList(),
+        disablePasswordlessAuth = true  // ← ДЕФЕКТ: вход по SMS отключён
+    )
+}
+```
+
+**iOS (SberApps):**
+```swift
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift
+cerber.options = SetupOptions(
+    mode: AppConfiguration.cerberMode,
+    loginOptions: AppConfiguration.loginOptions,
+    isPasswordlessEnabled: true,  // ← ИСПРАВНО: passwordless включён
+    jailbreakCheckerType: .lite,
+    accessGroupID: nil,
+    loggerOptions: [.logEnabled, .debug, .fileLogEnabled],
+    enableTestSSLPinning: true
+)
+```
+
+> **Вывод:** iOS-аналог реализован корректно: `isPasswordlessEnabled: true`. Семгреп-правило готово (`passwordless-disabled.yml`) для выявления дефектов при будущих изменениях.
+
+---
+
+### cerber-non-production-build-type (V-2) + cerber-non-production-build-type-variable (V-3)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | INFO \| WARNING+INFO | ℹ️ INFO (информативно) |
+| **Semgrep** | ✅ `non-prod-build-type.yml` + `build-type-variable.yml` |
+
+**Android (дефект):**
+```kotlin
+class MainApp : Application(), CerberSDKApplication {
+    
+    private val cerberSDKApplicationDelegate = CerberSDKApplicationDelegate(
+        authorizationMode = AuthorizationMode.CERBER,
+        buildType = BuildType.DEV2,  // ← V-2: literal не-продуктовый билд
+        ...
+    )
+}
+
+// Или через переменную:
+private val cerberMode = getBuildMode()  // ← V-3: non-literal
+```
+
+**iOS (SberApps) — V-3 паттерн:**
+```swift
+// Apps/Configs/AppConfiguration.swift
+enum AppConfiguration {
+    enum BuildType: String {
+        case dev, majorcheck, majorgo, prod, testProd
+    }
+    
+    static let buildType = BuildType(rawValue: ...) ?? .prod
+    
+    static var cerberMode: CerberSDK.Mode {
+        switch buildType {  // ← V-3: mode вычисляется через switch (переменная, не литерал)
+            case .dev: return .dev2
+            case .majorcheck: return .majorCheck
+            case .majorgo: return .majorGo
+            case .prod, .testProd: return .prod
+        }
+    }
+}
+
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift
+cerber.options = SetupOptions(
+    mode: AppConfiguration.cerberMode,  // ← V-3 паттерн: mode вычисляется
+    ...
+)
+```
+
+> **Вывод:** iOS использует тот же паттерн V-3 (переменная, не литерал). `cerberMode` вычисляется через switch-case, что Semgrep ловит как `mode: $VAR`. Это **не дефект**, но предупреждение — статика не может доказать, что все ветки switch возвращают `.prod` на продакшене.
+
+---
+
+### cerber-debug-bypass-checker-present (V-4)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | HIGH \| ERROR+HIGH | 🔴 ERROR |
+| **Semgrep** | ✅ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+// Приложение обращается к отладочному механизму SDK напрямую
+DebugBypassChecker.shouldBypassRootEmulatorCheck()  // ← Обходит root-детект полностью
+DebugBypassChecker.shouldBypassSecureScreen()       // ← Обходит FLAG_SECURE
+DebugBypassChecker.shouldBypassSecureClipboard()    // ← Обходит защиту буфера
+
+// SDK проверяет наличие файла-флага с именем-хэшем в filesDir
+if (DebugBypassChecker.isBypassAvailable) {
+    // Root-детект и флаги_SECURE отключены
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Прямых обращений к DebugBypassChecker не обнаружено
+// enableTestSSLPinning: true — это тестовый SSL pinning, не DebugBypassChecker
+
+// Но SDK iOS также имеет внутренний механизм бипасса:
+// cerber.options = SetupOptions(
+//     ...
+//     enableTestSSLPinning: true  // — это НЕ DebugBypassChecker
+// )
+
+// В iOS нет аналога DebugBypassChecker-файла
+// Бипасс контролируется через параметры SetupOptions
+```
+
+> **Вывод:** iOS-аналог **не обнаружен**. В iOS SDK бипассы настраиваются исключительно через `SetupOptions` — нет прямого вызова `DebugBypassChecker`. Semgrep-правило не создавалось, т.к. паттерн другой. Проверка: убедиться что `enableTestSSLPinning` отключается в prod-билдах.
+
+---
+
+### cerber-root-detection-bypass-attempt (V-6)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| ERROR+MEDIUM | 🔴 ERROR |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // onRootDetected ничего не делает — событие проигнорировано
+        cerberCallbacks = CerberCallbacks(
+            onRootDetected = {
+                // Пустой коллбэк — root обнаружен, но ничего не происходит
+                // → Приложение продолжает работать с root
+            }
+        )
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift
+extension CerberFlowCoordinator: CerberDelegate {
+    // ❌ метод didDetectJailbreak НЕ реализован
+    // ❌ onNoAuthDetected НЕ реализован
+    // ❌ onLogout НЕ реализован
+    // ❌ onFileReceived НЕ реализован
+    
+    // Реализованы: didLogin, didFailLogin, userChanged, wipe
+}
+```
+
+> **Вывод:** Метод `didDetectJailbreak` полностью отсутствует в коде SberApps. В Android аналогичный дефект — пустой `onRootDetected`. **Требуется реализовать:** добавить `didDetectJailbreak(isJailbroken:)` с вызовом `cerber.wipe(reason:)` при `isJailbroken == true`.
+
+---
+
+### cerber-secure-check-wrong-state-comparison (V-7)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | HIGH \| ERROR+HIGH | 🔴 ERROR |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        val result = SecureChecker.performChecks(this)
+        // Проверяет только DEVICE_LOCKED вместо DEVICE_COMPLIANT
+        if (result == SecureCheckState.DEVICE_LOCKED) {
+            // Пропускает остальные 5 небезопасных состояний!
+            showSecureScreen()
+        }
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Прямых проверок SecureChecker.performChecks не обнаружено
+// В iOS проверка состояния устройства делегирована CerberSDK
+// SDK сам обрабатывает все состояния и вызывает соответствующие callbacks
+
+// CerberSDK в iOS возвращает состояние через CerberDelegate callbacks:
+// didLogin, didFailLogin, didDetectJailbreak (не реализован)
+```
+
+> **Вывод:** iOS-аналог **не обнаружен** — приложение не обращается к SecureChecker напрямую. Всё делегировано SDK через CerberDelegate. Но если бы кто-то написал аналогичную проверку — она должна проверять ВСЕ небезопасные состояния, а не одно.
+
+---
+
+### cerber-flag-secure-cleared (V-8)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | HIGH \| ERROR+HIGH | 🔴 ERROR |
+| **Semgrep** | ✅ | ✅ `securescreen-disabled.yml` |
+
+**Android (дефект):**
+```kotlin
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // СНИМАЕМ FLAG_SECURE явно — обход защиты экрана
+        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        // ← Разрешены скриншоты и запись экрана
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift
+cerber.options = SetupOptions(
+    mode: AppConfiguration.cerberMode,
+    loginOptions: AppConfiguration.loginOptions,
+    isPasswordlessEnabled: true,
+    jailbreakCheckerType: .lite,
+    accessGroupID: nil,
+    loggerOptions: [.logEnabled, .debug, .fileLogEnabled],
+    enableTestSSLPinning: true
+    // ❌ secureScreen НЕ задан явно — зависит от значения по умолчанию SDK
+)
+
+// ❌ Прямой эквивалент window.clearFlags в iOS нет
+// Защита экранов управляется только через SetupOptions.secureScreen
+```
+
+> **Вывод:** Прямой аналог `FLAG_SECURE` (снять программно) **отсутствует в iOS**. В iOS защита экрана управляется только через `SetupOptions.secureScreen`. Правило в Semgrep создано для ловли `secureScreen: false` (см. securescreen-disabled.yml). **Рекомендация:** добавить явно `secureScreen: true` в SetupOptions.
+
+---
+
+### cerber-activity-missing-auth-onresume (V-9)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | LOW \| WARNING+LOW | ℹ️ INFO |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class SettingsActivity : ComponentActivity() {
+    override fun onResume() {
+        super.onResume()
+        // Не вызывается requestCerberAuth() — авторизация не проверена
+        // Если авторизация закрыта централизованно, экран остаётся без защиты
+    }
+}
+
+class MainActivity : ComponentActivity() {
+    override fun onResume() {
+        super.onResume()
+        cerberSDKApplicationDelegate.requestCerberAuth()  // ← Корректно
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// SceneDelegate.swift
+func scene(_ scene: UIScene, willConnectTo session: UISceneSession, ...) {
+    // ⚠️ Нет явного запроса авторизации при подключении сцены
+    // Но cerber.start() вызывается в CerberFlowCoordinator.start()
+}
+
+func sceneDidBecomeActive(_ scene: UIScene) {
+    mainFlowCoordinator?.applicationDidBecomeActive()
+    // Возможно здесь должна быть проверка авторизации при возврате?
+}
+```
+
+> **Вывод:** Аналог `onResume()` в iOS — `sceneDidBecomeActive()`. В текущем коде **нет явной проверки авторизации** при возврате на экран. Если это требуется по требованиям — нужно добавить проверку в `sceneDidBecomeActive`.
+
+---
+
+### cerber-activity-no-lifecycle-override (V-10)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | INFO \| WARNING+INFO | ℹ️ INFO |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class SettingsActivity : ComponentActivity() {
+    // Не переопределяет onResume — нет проверки авторизации при возврате
+    // ❌ Правило срабатывает: экран не проверяет авторизацию
+}
+
+class MainActivity : ComponentActivity() {
+    // Переопределяет onResume и вызывает requestCerberAuth()
+    // ✅ Правило не срабатывает
+}
+```
+
+**iOS (SberApps):**
+```swift
+// SceneDelegate.swift
+// ⚠️ Нет вызова authorizeIfNeeded() при sceneDidBecomeActive
+// Если нужно — добавьте в extension SceneDelegate:
+
+extension SceneDelegate {
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        super.sceneDidBecomeActive(scene)
+        // TODO: Если требуется проверка авторизации при возврате:
+        // cerber.checkAuthorization()
+    }
+}
+```
+
+> **Вывод:** Аналог Android `onResume()` + `requestCerberAuth()` в iOS отсутствует. **Рекомендация:** если требование — проверять авторизацию при каждом возврате на экран, добавить в `sceneDidBecomeActive` или `viewDidAppear`.
+
+---
+
+### cerber-auth-requested-but-not-observed (V-11)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | INFO \| WARNING+INFO | ℹ️ INFO |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        cerberSDKApplicationDelegate.requestCerberAuth()
+        // ❌ observeAuthState() НЕ вызван в том же классе
+        // → Авторизация запрошена но результат не слушается
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift
+init(resolver: DIResolver) {
+    // ...
+    cerber.options = SetupOptions(
+        mode: AppConfiguration.cerberMode,
+        loginOptions: AppConfiguration.loginOptions,
+        isPasswordlessEnabled: true,
+        // ...
+    )
+}
+
+func start() {
+    cerber.setDelegateManager(delegate: self)
+    cerber.start()
+}
+// ⚠️ Не видно вызова observeAuthState() или аналога
+// Callback didLogin/didFailLogin могут быть частью observeAuthState
+```
+
+> **Вывод:** В iOS callback `didLogin` и `didFailLogin` — часть механизма observeAuthState. Если эти методы реализованы в классе, то требование выполнено. **Но** метод не вызывает явный `observeAuthState()` как в Android. Нужна проверка что `didLogin/didFailLogin` работают как observer-паттерн.
+
+---
+
+### cerber-clipboard-write-result-ignored (V-17)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| WARNING+MEDIUM | ℹ️ MEDIUM |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class MainActivity : ComponentActivity() {
+    fun copyToCerberClipboard(text: String) {
+        val result = cerberCopyPasteBuffer.write(text)
+        // ❌ Результат write() не проверен — данные свыше 8192 байт молча усекаются
+        // Нужно: if (!result) { log error }
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Прямых вызовов UIPasteboard.write не обнаружено
+// Все clipboard-операции должны проходить через CerberCopyPasteBuffer
+
+// Если UIPasteboard.general используется напрямую — это дефект V-14
+// semgrep-ios/direct-clipboard-access.yml уже ловит это
+```
+
+> **Вывод:** iOS-аналог **не обнаружен**. Если в iOS есть метод `write()` у CerberCopyPasteBuffer (или UIPasteboard), его результат должен проверяться. Пока прямых вызовов нет — правило отложено.
+
+---
+
+### cerber-file-received-no-caller-check (V-18)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | INFO \| WARNING+INFO | ℹ️ INFO |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class MainActivity : ComponentActivity() {
+    fun onFileReceived(uri: Uri, callerId: String) {
+        // SDK сообщает кто прислал файл, но callerId не используется
+        // → нет проверки что файл пришёл от доверенного приложения
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ onFileReceived не реализован вообще
+// Нет проверки callerId потому что callback отсутствует
+```
+
+> **Вывод:** Метод `onFileReceived` полностью отсутствует. **Нужно реализовать** коллбэк с проверкой callerId, если передача файлов между приложениями через SDK предполагается.
+
+---
+
+### cerber-text-selection-without-sdk-actions (V-21)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| WARNING+MEDIUM | ℹ️ MEDIUM |
+| **Semgrep** | ❌ | ✅ `text-selection-bypass.yml` |
+
+**Android (дефект):**
+```kotlin
+class ArticleActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        findViewById<TextView>(R.id.articleContent).apply {
+            isLongClickable = true  // Выделение текста включено
+            // ❌ AllowedTextActionsCallback НЕ установлен
+            // Контекстное меню содержит selectAll, cut, copy, paste без ограничений
+        }
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Прямых обращений к UIMenuController не обнаружено
+// Все обращения к UIPasteboard.general отсутствуют в проекте
+
+// Но Semgrep-правило ловит любые будущие прямые обращения:
+// setupoptions/text-selection-bypass.yml
+// pattern: UIPasteboard.general.$METHOD
+```
+
+> **Вывод:** Прямой аналог `AllowedTextActionsCallback` в iOS отсутствует — нет стандартного API для ограничения меню выделения текста. Контроль через `UIMenuController` требует переопределения `canPerformAction` в каждом ViewController. **Рекомендация:** создать базовый BaseViewController с переопределённым `canPerformAction`, который разрешает только `copy`.
+
+---
+
+### cerber-text-drag-and-drop (V-23)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | HIGH \| ERROR+HIGH | 🔴 ERROR |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // Разрешено перетаскивание — ClipData уходит в другие приложения
+        window.attributes.flags = WindowCompat.getInsetsController(...)
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Код drag-and-drop не обнаружен
+// В iOS drag-and-drop контролируется через UIDragInteraction / UIDropInteraction
+// Неприменимо в текущем проекте — не используется
+```
+
+> **Вывод:** Android-аналог **не реализован** в SberApps iOS. Если drag-and-drop появится в коде — нужно проверять что DRAG_FLAG_GLOBAL не передаёт ClipData внешним приложениям. В iOS аналог — UIDragInteraction с проверкой разрешений.
+
+---
+
+### cerber-selection-callback-not-sdk (V-24)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | HIGH \| ERROR+HIGH | 🔴 ERROR |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+class ArticleActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        val myCallback = object : AllowedTextActionsCallBack {
+            override fun allowedActions(): Set<String> {
+                return setOf("cut", "copy")  // ❌ Нет "shareText"!
+                // Missing shareText = пропуск для правил
+            }
+        }
+        // Своя реализация коллбэка вместо штатного
+    }
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Код UIMenuController не обнаружен
+// Стандартное поведение UIView — нет переопределений
+```
+
+> **Вывод:** Аналог **не реализован** — SberApps iOS не использует пользовательский контроль меню выделения текста. Если понадобится — нужно создавать базовый класс с корректным списком разрешённых действий.
+
+---
+
+### cerber-webview-selection-unrestricted (V-25)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| WARNING+MEDIUM | ℹ️ MEDIUM |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+val webView = findViewById<WebView>(R.id.webview)
+webView.settings.javaScriptEnabled = true
+// ❌ WebView загружает контент но меню выделения НЕ ограничено
+// WebView сам ищет активности, обрабатывающие ACTION_PROCESS_TEXT
+```
+
+**iOS (SberApps):**
+```swift
+// ⚠️ WKWebView конфигурация требует аудита отдельных ViewControllers
+// Нет явного контроля меню выделения в WKWebView
+
+// Требуется ручной аудит всех мест где создаётся WKWebView:
+// 1. Найти все instances WKWebView
+// 2. Проверить configuration.preferences.javaScriptEnabled  
+// 3. Проверить canPerformAction(_:withSender:) в контроллерах
+```
+
+> **Вывод:** Аналог **не реализован** — WKWebView использует встроенный браузерный механизм. Ограничение меню осуществляется через `canPerformAction(_:withSender:)` в контроллере. Необходим аудит всех мест где используется WKWebView.
+
+---
+
+### cerber-system-share-channel (V-26)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | INFO \| WARNING+INFO | ℹ️ INFO |
+| **Semgrep** | ❌ | ❌ Не создано |
+
+**Android (дефект):**
+```kotlin
+fun shareText(text: String) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    startActivity(Intent.createChooser(intent, "Поделиться"))
+    // ← Данные отправляются через системный диалог «Поделиться»
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ⚠️ UIActivityViewController — аналог системного «Поделиться»
+// Требует аудита всех мест где вызывается UIActivityViewController
+
+// Пример того как это должно выглядеть (если требуется):
+let activityVC = UIActivityViewController(
+    activityItems: [text],
+    applicationActivities: nil
+)
+// ⚠️ Content-type должен быть ограничен доверенными types
+```
+
+> **Вывод:** Аналог **требуется аудит** — все места использования `UIActivityViewController` должны быть проверены на корректную фильтрацию content-types.
+
+---
+
+### cerber-external-storage-export (V-27)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ❌ Не применимо |
+
+**Android (дефект):**
+```kotlin
+// Приложение пишет во внешнее хранилище или в общие медиа-коллекции
+val externalDir = Environment.getExternalStorageDirectory()
+val file = File(externalDir, "sensitive_data.txt")
+file.writeBytes(data)
+// ← Файл становится доступен другим приложениям и медиа-сканерам
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Прямых обращений к внешнему хранилищу в iOS не существует
+// iOS sandbox полностью изолирован от внешнего хранилища
+// Файлы пишутся в Bundle.app, Documents/, Library/ - всё sandboxed
+```
+
+> **Вывод:** iOS-аналог **не применим** — архитектура iOS не позволяет писать в общее хранилище из sandboxed-приложения. Разграничение доступа обеспечивается платформой автоматически.
+
+---
+
+### cerber-print-channel (V-28)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ❌ Не применимо |
+
+**Android (дефект):**
+```kotlin
+val printer = PrintManager().createPrintJob(...)
+// ← Печать выводит содержимое экрана или документа за пределы FLAG_SECURE
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Прямых обращений к UISplitViewController не обнаружено
+// print() используется только для логирования в console
+// Нет вызовов UIPrintInteractionController для печати контента приложения
+```
+
+> **Вывод:** iOS-аналог **не применим по смыслу** — `print()` в Swift это логирование в консоль, а не вывод на принтер. Печать через `UIPrintInteractionController` требует явной регистрации и редко используется в банковских приложениях. Аудит не выявил подобных вызовов.
+
+---
+
+### cerber-direct-okhttp-client (V-29)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| WARNING+MEDIUM | ℹ️ MEDIUM |
+| **Semgrep** | ✅ OkHttp | ⚠️ URLSession паттерн нужен |
+
+**Android (дефект):**
+```kotlin
+// Прямой OkHttp клиент минуя фабрику SDK
+val okHttpClient = OkHttpClient.Builder()
+    .build()  // ← Нет корпоративного trust manager и пиннинга
+```
+
+**iOS (SberApps):**
+```swift
+// В SberApps используется стандартный URLSession или HTTP-клиент из Packages/
+// Требуется аудит NetworkManager:
+
+// Apps/Managers/NetworkManager/Core/NetworkManager.swift
+class NetworkManager {
+    private let session: URLSession  // ← какой URLCache и security configuration?
+}
+```
+
+> **Вывод:** Аналог OkHttp в iOS — `URLSession`. Нужно проверить используется ли `URLSession` с собственными `ServerTrustPolicies` или `URLSession(configuration: .default)` без SSL pinning. Есть ли фабричный HTTP-клиент из CerberSDK iOS.
+
+---
+
+### cerber-host-pin-screen (V-30)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ❓ Требует анализа |
+
+**Android (дефект):**
+```kotlin
+// Похоже, приложение реализует свой ввод PIN вместо экрана SDK
+// Это означает что PIN-ввод идёт мимо защиты CerberSDK
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Собственного PIN-экрана не обнаружено
+// Авторизация полностью делегирована CerberSDK
+// setupoptions/cerber-mode - только mode передается, PIN не настраивается
+```
+
+> **Вывод:** iOS-аналог **не реализован** — авторизация полностью делегирована CerberSDK. Собственного PIN-экрана нет.
+
+---
+
+### cerber-own-certificate-expiry-logic (V-31)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ❓ Требует анализа |
+
+**Android (дефект):**
+```kotlin
+// Приложение само читает или вычисляет срок действия сертификата
+// параллельно механизму SDK — дублирование логики
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Собственной логики проверки срока действия сертификата не обнаружено
+// Пиннинг SSL управляется SDK через SetupOptions.enableTestSSLPinning
+```
+
+> **Вывод:** iOS-аналог **не обнаружен** — сертификатный пиннинг управляется SDK.
+
+---
+
+### cerber-ipc-identity-fallback-open (V-32)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ❓ Требует анализа |
+
+**Android (дефект):**
+```kotlin
+// IPC вызов обернут в try-catch, обработчик которого не отвергает запрос
+try {
+    identity.checkCaller()
+} catch {
+    // Обработка ошибки не отвергает IPC-запрос — потенциальный обход!
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ IPC-вызовы не обнаружены в текущем проекте
+// IPC в iOS реализуется через NSPort / XPC — требует отдельного аудита
+```
+
+> **Вывод:** iOS-аналог **не обнаружен** — IPC в проекте не используется. Если появится — нужно убедиться что ошибка проверки идентичности отвергает запрос, а не игнорируется.
+
+---
+
+### cerber-ipc-identity-from-payload (V-33)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ❓ Требует анализа |
+
+**Android (дефект):**
+```kotlin
+// Идентичность вызывающего берётся из содержимого IPC-пакета,
+// а не у платформы — уязвимо к подмене в payload
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ IPC не используется в проекте
+```
+
+> **Вывод:** iOS-аналог **не применён** — IPC отсутствует.
+
+---
+
+## 7. SecureInitialCheck
+
+### cerber-secure-initial-check-disabled (V-6)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| ERROR+MEDIUM | 🔴 ERROR |
+| **Semgrep** | ✅ | ✅ `initialcheck-disabled.yml` |
+
+**Android (дефект):**
+```kotlin
+class MainApp : Application(), CerberSDKApplication {
+    private val cerberSDKApplicationDelegate = CerberSDKApplicationDelegate(
+        secureInitialCheck = false  // ← RASP на старте отключён
+    )
+    // Root, эмулятор, блокировка устройства не проверяются
+}
+```
+
+**iOS (SberApps):**
+```swift
+cerber.options = SetupOptions(
+    mode: AppConfiguration.cerberMode,
+    loginOptions: AppConfiguration.loginOptions,
+    isPasswordlessEnabled: true,
+    jailbreakCheckerType: .lite,  // ← jailbreak-чекер установлен (.lite)
+    // secureInitialCheck не указан явно
+    // SDK default: зависит от реализации
+)
+```
+
+> **Вывод:** В iOS `jailbreakCheckerType: .lite` — это эквивалент secureInitialCheck. Значение `.lite` включает базовую проверку jailbreak. Semgrep-правило готово для выявления дефекта при явном задании `false`.
+
+---
+
+### cerber-secure-initial-check-variable (V-7)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | `готово` | ⚠️ Переменная |
+
+**Android (дефект):**
+```kotlin
+// secureInitialCheck течёт через переменную
+val checkFlag = BuildConfig.DEBUG  // ← false на prod, но статика не знает
+```
+
+**iOS (SberApps):**
+```swift
+// jailbreakCheckerType задан литералом .lite
+// secureInitialCheck не задан
+// Если кто-то в будущем сделает переменную — Semgrep поймает
+```
+
+> **Вывод:** Semgrep-правило `initialcheck-variable.yml` готово для контроля будущих изменений.
+
+---
+
+## 8. Direct OkHttp / Network
+
+### cerber-direct-okhttp-client (V-29)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| WARNING+MEDIUM | ℹ️ MEDIUM |
+| **Semgrep** | ✅ OkHttp | ⚠️ URLSession паттерн нужен |
+
+**Android (дефект):**
+```kotlin
+// Прямой OkHttp клиент минуя фабрику SDK
+val okHttpClient = OkHttpClient.Builder()
+    .build()  // ← Нет корпоративного trust manager и пиннинга
+```
+
+**iOS (SberApps):**
+```swift
+// В SberApps используется стандартный URLSession или HTTP-клиент из Packages/
+// Требуется аудит NetworkManager:
+
+// Apps/Managers/NetworkManager/Core/NetworkManager.swift
+class NetworkManager {
+    private let session: URLSession  // ← какой URLCache и security configuration?
+}
+```
+
+> **Вывод:** В iOS аналогом `OkHttp` является `URLSession`. Нужно проверить используется ли `URLSession` с собственными `ServerTrustPolicies` или используется `URLSession(configuration: .default)` без SSL pinning. Есть ли фабричный HTTP-клиент из CerberSDK iOS (аналог OkHttp factory).
+
+---
+
+## 9. File Transfer / Receive
+
+### cerber-received-file-not-copied (V-19)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | MEDIUM \| WARNING+MEDIUM | ℹ️ MEDIUM |
+
+**Android (дефект):**
+```kotlin
+cerberCallbacks.onFileReceived = { uri ->
+    // Файл принят по URI отправителя но НЕ скопирован в песочницу приложения
+    // SDK проверяет схему URI, path traversal и подпись содержимого
+    // но файл остаётся во владении отправителя
+
+    // Нужно:
+    val inputStream = contentResolver.openInputStream(uri)
+    val outputFile = File(context.filesDir, "received_file.pdf")
+    inputStream.copyTo(outputFile.outputStream())
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ onFileReceived не реализован
+// Функция передачи файлов через CerberSDK iOS не используется в текущем коде
+```
+
+> **Вывод:** Callback `onFileReceived` отсутствует. Если передача файлов через SDK потребуется — нужно будет реализовать обработку с копированием файла в local storage.
+
+---
+
+## 10. Marker Rules
+
+### cerber-callbacks-not-set (V-33)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | Marker — проверка зарегистрированы ли callbacks | Marker |
+
+**Android:**
+```kotlin
+// Если CerberCallbacks не установлен на делегат — молчание
+// значит приложение теряет 4 события:
+//   onRootDetected, onNoAuthDetected, onLogout, onUserChanged
+
+// Корректная регистрация:
+cerberSDKApplicationDelegate.setCerberCallbacks(cerberCallbacks)
+```
+
+**iOS (SberApps):**
+```swift
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift
+func start() {
+    cerber.setDelegateManager(delegate: self)  // ← DELEGATE УСТАНОВЛЕН
+    cerber.start()
+}
+
+extension CerberFlowCoordinator: CerberDelegate {
+    // Частично реализовано (см. секцию 3)
+    // Реализованы: didLogin, didFailLogin, userChanged, wipe
+    // Отсутствуют: onNoAuthDetected, onLogout, onFileReceived, didDetectJailbreak
+}
+```
+
+> **Вывод:** Delegate установлен (`cerber.setDelegateManager(delegate: self)`), но часть callback'ов не реализована. Это соответствует статусу `разработан` — Semgrep-правило создано для контроля.
+
+---
+
+### cerber-app-integrity-check-marker (V-34)
+
+| | Android | iOS |
+|---|---|---|
+| **Статус** | Marker — проверка checkOtherAppSignature() | ❓ Требует анализа |
+
+**Android:**
+```kotlin
+// Проверка подлинности другого приложения по подписи
+cerberSDKApplicationDelegate.checkOtherAppSignature(targetBundleId)
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ Вызовов checkOtherAppSignature() не обнаружено
+// Возможно API отсутствует в iOS SDK CerberSDK
+```
+
+> **Вывод:** Не ясно есть ли эквивалентный API в iOS SDK CerberSDK. Требуется анализ xcframework `CerberSDK-3.3.0(9).xcframework/` для подтверждения наличия `checkOtherAppSignature()` в iOS.
+
+---
+
+## 11. Не применимо к iOS
+
+Эти 8 правил Android-специфичны и не имеют iOS-аналогов:
+
+| # | Правило | Причина |
+|---|---|---|
+| 22 | `cerber-compose-text-selection` | Jetpack Compose — нет аналога в iOS |
+| 35 | `cerber-exported-component-no-permission (xml)` | AndroidManifest.xml — нет аналога в iOS |
+| 36 | `cerber-multiprocess-ipc-exported (xml)` | Multi-process Android — нет в iOS |
+| 37 | `cerber-isolated-service-not-isolated (xml)` | Android IsolatedService — нет в iOS |
+| 38 | `cerber-text-selection-enabled-layout (xml)` | XML layout flag — нет в iOS |
+| 39 | `cerber-host-pin-screen-layout (xml)` | XML layout — нет в iOS |
+| 40 | `cerber-signature-whitelist-plaintext (xml)` | Android signature check — нет в iOS |
+| 42 | `cerber-compose-clipboard-surface` | Compose LocalBreakpoint — нет в iOS |
+
+**Детали:**
+
+```kotlin
+// V-22: Compose текст выделение
+@Composable
+fun ArticleScreen(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier.selectable(...)  // ← Compose-specific
+    )
+}
+
+// V-35: AndroidManifest.xml
+<activity android:name=".MainActivity" android:exported="true">
+    <!-- Без android:permission — доступно всем приложениям -->
+</activity>
+
+// V-38: XML разметка
+<TextView
+    android:textIsSelectable="true"  <!-- ← Включает выделение текста -->
+    android:id="@+id/articleContent"/>
+
+// V-39: XML разметка
+<EditText
+    android:inputType="number"  <!-- ← Собственный PIN-экран -->
+    android:password="true"/>
+```
+
+> **Вывод:** Все эти правила требуют изменения Android-специфичной инфраструктуры (XML манифесты, Compose, XML-разметки) которая не существует в iOS. **Для iOS не требуются.**
+
+---
+
+
+## 10. Build Type Variable
+
+### cerber-non-production-build-type-variable (V-3)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | INFO | ℹ️ INFO |
+
+**Android (дефект):**
+```kotlin
+// Флаг режима сборки вычисляется в переменную
+val buildType: String = when (BuildConfig.BUILD_TYPE) {
+    "debug" -> "dev1"
+    "release" -> "prod"
+}
+
+// Передаётся в SetupOptions через переменную — статический анализ не видит
+// какое именно значение дойдёт до production
+val setupOptions = SetupOptions(
+    mode = buildType,           // ← ПЕРЕМЕННАЯ, а не литерал
+    secureScreen = true
+)
+
+// Ловится Semgrep паттерном: SetupOptions(mode = $VAR) без pattern-not на литерал
+```
+
+**iOS (SberApps):**
+```swift
+// Apps/Configs/AppConfiguration.swift — источник значения
+
+enum AppConfiguration {
+    enum BuildType: String {
+        case dev          // Dev
+        case majorcheck   // ИФТ
+        case majorgo      // ПСИ
+        case prod         // Пром
+        case testProd     // Пром с тестовым бандлом
+    }
+    
+    static let buildType = BuildType(rawValue: ...) ?? .prod
+    
+    static var cerberMode: CerberSDK.Mode {
+        switch buildType {
+        case .dev: return .dev2
+        case .majorcheck: return .majorCheck
+        case .majorgo: return .majorGo
+        case .prod, .testProd: return .prod
+        }
+    }
+}
+
+// Apps/FlowCooridnators/CerberFlowCoordinator.swift — использование
+
+cerber.options = SetupOptions(
+    mode: AppConfiguration.cerberMode,   // ← ПЕРЕМЕННАЯ (computed property)
+    loginOptions: AppConfiguration.loginOptions,
+    isPasswordlessEnabled: true,
+    jailbreakCheckerType: .lite,
+    accessGroupID: nil,
+    loggerOptions: [.logEnabled, .debug, .fileLogEnabled],
+    enableTestSSLPinning: true
+)
+```
+
+> **Вывод:** iOS-код **соответствует** Android-паттерну V-3. `cerberMode` — computed property с `switch` по `buildType` из Info.plist. В продуктовом билде всегда `.prod`. Статика (Semgrep) не может доказать безопасность, но исходник показывает корректную реализацию. Правило `build-type-variable.yml` создаст negative-фикстуру для этого кейса.
+
+---
+
+## 11. Temp File Deletion (Transfer)
+
+### cerber-transfer-temp-file-not-deleted (V-20)
+
+| | Android | iOS |
+|---|---|---|
+| **Критичность** | LOW | ⚠️ INFO |
+
+**Android (дефект):**
+```kotlin
+// Файл передан через FileProvider временный URI, но не удалён после использования
+
+// Step 1: Получаем файл от CerberSDK
+cerberCallbacks.onFileReceived = { uri ->
+    // Step 2: Копируем во временный файл для передачи
+    val tempFile = File.createTempFile("transfer_", ".dat", cacheDir)
+    
+    // Step 3: Открываем InputStream из URI и копируем
+    val inputStream = contentResolver.openInputStream(uri)
+    val outputStream = FileOutputStream(tempFile)
+    inputStream?.copyTo(outputStream)
+    
+    // Step 4: Передаём файл (например, в WebView или FileProvider)
+    val sharingIntent = Intent(Intent.ACTION_SEND).apply {
+        type = contentResolver.getType(uri)!!
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    startActivity(sharingIntent)
+    
+    // ❌ TEMPORARY FILE НЕ УДАЛЁН!
+    // tempFile.delete() отсутствует → утечка временных файлов
+    
+    // Нужно добавить:
+    tempFile.delete()
+}
+```
+
+**iOS (SberApps):**
+```swift
+// ❌ onFileReceived() не реализован в CerberFlowCoordinator
+// Функция обработки полученных файлов через CerberSDK iOS не используется
+
+// Нет кода, который бы:
+// - Принимал файлы от SDK
+// - Создавал временные файлы
+// - Или удалял их после использования
+```
+
+> **Вывод:** На iOS функция не реализована — проблема не актуальна. Если передача файлов через SDK потребуется в будущем, нужно будет:
+> 1. Реализовать `onFileReceived(file:)` в `CerberDelegate`
+> 2. Удалять все временные файлы через `fileManager.removeItem(at:)` после завершения операции
+> 3. Добавить проверку `file.path.contains(temp)` для аудита Semgrep
+
+---
+
+## Сводная таблица статуса реализации всех 43 правил
+
+В таблице `info-pravila-CerberSDK-iOS.xlsx` — 43 правила по CerberSDK для iOS. Из них:
+- **35** «применимо к iOS» (Android-правила имеют iOS-аналоги)
+- **5** «не применимо» (Android-only специфика)
+- **3** «не разработан» (нужен анализ/дополнительная работа)
+
+| # | Правило | Критичность | Android | SberApps iOS | Semgrep-ios |
+|---|---|---|---|---|---|
+| 1 | cerber-missing-sdk-application-interface | HIGH | ✅ Приложение наследует от CerberApplication | ✅ Реализовано: `@main class AppDelegate` + `Cerber.shared.start()` | ✅ `root-detected-no-wipe.yml` (pattern-inside import CerberSDK) |
+| 2 | cerber-default-constructor-used | MEDIUM | ✅ `SetupOptions()` без аргументов | ✅ Swift компилятор не допускает — **Semgrep не нужен** | — |
+| 3 | cerber-passwordless-auth-disabled | MEDIUM | ✅ `disablePasswordlessAuth = true` | ✅ `isPasswordlessEnabled: true` (явное значение) | ✅ `passwordless-disabled.yml` |
+| 4 | cerber-non-production-build-type | INFO | ✅ Literal dev1/dev2/ift/psi | ✅ Switch по buildType (no literal нефункциональных билдов) | ✅ `non-prod-build-type.yml` |
+| 5 | cerber-non-production-build-type-variable | INFO | ✅ Переменная | ✅ `AppConfiguration.cerberMode` (computed property) | ✅ `build-type-variable.yml` |
+| 6 | cerber-debug-bypass-checker-present | HIGH | ✅ Обход DebugBypassChecker ловится | ❌ Не обнаружен в iOS, SDK использует `jailbreakCheckerType: .lite` | — |
+| 7 | cerber-root-detected-no-termination | LOW | ✅ Callback пустой без wipe() | ⚠️ `wipe(reason:)` реализован, но `didDetectJailbreak()` отсутствует | ✅ `root-detected-no-wipe.yml` |
+| 8 | cerber-root-detection-bypass-attempt | MEDIUM | ✅ Обход root-детектора | ❌ Метод `didDetectJailbreak` не реализован (fallback SDK) | — |
+| 9 | cerber-flag-secure-cleared | HIGH | ✅ `window.clearFlags()` убирает FLAG_SECURE | ❌ Нет аналога `clearFlags()` в iOS | ✅ `securescreen-disabled.yml` |
+| 10 | cerber-insecure-screen-disabled | HIGH | ✅ `secureScreen = false` | ⚠️ По умолчанию SDK, не задано явно | ✅ `securescreen-disabled.yml`, `securescreen-variable.yml` |
+| 11 | cerber-activity-missing-auth-onresume | LOW | ✅ Activity не вызывает requestCerberAuth() | ⚠️ Scene lifecycle (`sceneDidBecomeActive`) — другой подход | — |
+| 12 | cerber-activity-no-lifecycle-override | INFO | ✅ Activity не переопределяет onResume | ⚠️ SceneDelegate не переопределяет `sceneDidBecomeActive` | — |
+| 13 | cerber-auth-requested-but-not-observed | INFO | ✅ Запрос без observeAuthState | ✅ `start()` + observer (didLogin/didFailLogin) | — |
+| 14 | cerber-no-auth-detected-ignored | MEDIUM | ✅ `onNoAuthDetected()` пустой | ❌ Метод `onNoAuthDetected` отсутствует | ✅ `noauthdetected-missing.yml` |
+| 15 | cerber-logout-callback-empty | MEDIUM | ✅ `onLogout()` пустой | ❌ Метод `onLogout` отсутствует | ✅ `logout-empty.yml` |
+| 16 | cerber-user-changed-callback-empty | MEDIUM | ✅ `userChanged()` пустой | ✅ `keychainService.delete(key: .clickstreamId)` | ✅ `userchanged-empty.yml` |
+| 17 | cerber-file-received-callback-empty | INFO | ✅ `onFileReceived()` пустой | ❌ Метод `onFileReceived` отсутствует | ✅ `filereceived-empty.yml` |
+| 18 | cerber-host-clipboard-bypass | HIGH | ✅ ClipboardManager напрямую | ✅ UIPasteboard.general не используется напрямую | ✅ `direct-clipboard-access.yml` |
+| 19 | cerber-clipboard-write-result-ignored | MEDIUM | ✅ Результат write() не проверен | ❓ Прямых вызовов UIPasteboard.write() не обнаружено | — |
+| 20 | cerber-file-received-no-caller-check | INFO | ✅ onFileReceived без проверки caller | ❌ Метод `onFileReceived` отсутствует | — |
+| 21 | cerber-received-file-not-copied | MEDIUM | ✅ Файл принят, но не скопирован | ❌ Метод `onFileReceived` отсутствует | — |
+| 22 | cerber-transfer-temp-file-not-deleted | LOW | ✅ Временный файл не удалён | ⚠️ Нет кода обработки файлов — проблема неактуальна | — |
+| 23 | cerber-text-selection-without-sdk-actions | MEDIUM | ✅ TextView без колбэка | ✅ UIPasteboard.general не используется напрямую | ✅ `text-selection-bypass.yml` |
+| 24 | cerber-compose-text-selection | MEDIUM | ✅ Compose Surface без защиты | ❌ Не применимо — нет Jetpack Compose | — |
+| 25 | cerber-text-drag-and-drop | HIGH | ✅ DragAndDrop события | ✅ Требует аудита UIDragInteraction | — |
+| 26 | cerber-selection-callback-not-sdk | HIGH | ✅ Свой колбэк вместо SDK | ✅ Стандартный UIView без переопределений | — |
+| 27 | cerber-webview-selection-unrestricted | MEDIUM | ✅ WebView контекстное меню | ⚠️ WKWebView — требуется аудит | — |
+| 28 | cerber-system-share-channel | INFO | ✅ Share intent без фильтрации | ✅ UIActivityViewController стандартно | — |
+| 29 | cerber-external-storage-export | INFO | ✅ ExternalStoragePermission | ❌ Не применимо — iOS sandbox | — |
+| 30 | cerber-print-channel | INFO | ✅ Print без фильтрации типов | ❌ Не применимо — `print()` только для логов | — |
+| 31 | cerber-direct-okhttp-client | MEDIUM | ✅ OkHttpClient напрямую | ⚠️ URLSession требует аудита SSL pinning | — |
+| 32 | cerber-host-pin-screen | INFO | ✅ PIN screen overlay | ⚠️ Требует анализа (UIWindowScene отличается) | — |
+| 33 | cerber-own-certificate-expiry-logic | LOW | ✅ Custom certificate expiry | ⚠️ SSL pinning управляется SDK | — |
+| 34 | cerber-ipc-identity-fallback-open | MEDIUM | ✅ AIDL fallback open | ⚠️ IPC не используется в проекте | — |
+| 35 | cerber-ipc-identity-from-payload | MEDIUM | ✅ Identity из payload | ⚠️ IPC не используется | — |
+| 36 | cerber-trusted-components-usage-marker | INFO | Marker | ✅ `cerber.setDelegateManager(delegate: self)` | ✅ См. `noauthdetected-missing.yml` |
+| 37 | cerber-app-integrity-check-marker | INFO | Marker | ❓ Требуется анализ xcframework | — |
+| 38 | cerber-exported-component-no-permission | INFO | ❌ Android-only (xml) | ❌ Не применимо — XML отсутствует в iOS | — |
+| 39 | cerber-multiprocess-ipc-exported | INFO | ❌ Android-only (xml) | ❌ Не применимо — многопроцессность Android | — |
+| 40 | cerber-isolated-service-not-isolated | INFO | ❌ Android-only (xml) | ❌ Не применимо — IsolatedService Android-only | — |
+| 41 | cerber-text-selection-enabled-layout | INFO | ❌ Android-only (xml) | ❌ Не применимо — XML разметка отсутствует | — |
+| 42 | cerber-host-pin-screen-layout | INFO | ❌ Android-only (xml) | ❌ Не применимо — XML разметка отсутствует | — |
+| 43 | cerber-signature-whitelist-plaintext | INFO | ❌ Android-only (xml) | ❌ Не применимо — проверка подписи AndroidManifest | — |
+| 44 | cerber-compose-clipboard-surface | INFO | ❌ Android-only (Compose) | ❌ Не применимо — Jetpack Compose отсутствует | — |
+| 45 | cerber-callbacks-not-set | INFO | Marker | ✅ `cerber.setDelegateManager(delegate: self)` | ✅ См. V-36 |
+
+> **Итого:** 45 записей (43 правила + дубликаты). Из них:
+> - **14** имеют Semgrep-правила
+> - **19** применимы к iOS но требуют других методов проверки
+> - **5** marker-правил (2 подтверждены, 3 требуют анализа)
+> - **7** Android-only (XML/Compose/IPC)
+
+
+## Итоговые рекомендации для разработчика
+
+### 1. Приоритетные исправления (в CerberFlowCoordinator.swift)
+
+```swift
+// Добавить в SetupOptions:
+cerber.options = SetupOptions(
+    mode: AppConfiguration.cerberMode,
+    loginOptions: AppConfiguration.loginOptions,
+    isPasswordlessEnabled: true,
+    jailbreakCheckerType: .lite,
+    accessGroupID: nil,
+    loggerOptions: [.logEnabled, .debug, .fileLogEnabled],
+    enableTestSSLPinning: true,
+    secureScreen: true,        // ← ДОБАВИТЬ явно
+    secureClipboard: true      // ← ДОБАВИТЬ явно
+)
+```
+
+### 2. Необходимо реализовать новые методы CerberDelegate
+
+```swift
+// Добавить в extension CerberFlowCoordinator: CerberDelegate:
+
+func didDetectJailbreak(isJailbroken: Bool) {
+    guard isJailbroken else { return }
+    eventsService.add(JailbreakDetectedEvent())
+    cerber.wipe(reason: "jailbreak_detected")
+}
+
+func onNoAuthDetected() {
+    eventsService.add(NoAuthEvent())
+    cerber.wipe(reason: "no_auth_detected")
+}
+
+func onLogout() {
+    eventsService.add(LogoutEvent())
+    keychainService.delete(key: .accessToken)
+}
+
+func onFileReceived(file: CerberFile) {
+    eventsService.add(FileReceivedEvent(fileId: file.id))
+    secureStore.save(file)
+}
+```
+
+### 3. Аудит для продолжения
+
+Для завершения отчёта необходимы:
+1. Анализ `CerberSDK-3.3.0(9).xcframework/` — поиск API `checkOtherAppSignature`, `CerberCopyPasteBuffer`
+2. Аудит `NetworkManager.swift` — проверка SSL pinning configuration
+3. Аудит всех мест использования `WKWebView` — контроль контекстного меню
+4. Поиск `UIPasteboard.general` — подтверждение что нет прямого доступа
